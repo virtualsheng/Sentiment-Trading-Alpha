@@ -255,7 +255,30 @@ def build_remote_snapshot_payload(db, request_id: Optional[str] = None) -> Dict[
     signal = current.signal or {}
     recommendations = list(signal.get("recommendations") or [])
     if not recommendations:
-        raise ValueError("Latest run has no recommendations to snapshot")
+        # Not an error — zero-recommendation runs are valid (e.g., all-HOLD,
+        # no actionable signals). Return a lightweight sentinel so callers
+        # can handle this case without a noisy traceback.
+        return {
+            "request_id": current.request_id,
+            "timestamp": _ensure_utc(current.timestamp),
+            "timestamp_label": _format_ts(current.timestamp, _safe_timezone(getattr(config, "display_timezone", "") or "UTC")),
+            "timezone": _safe_timezone(getattr(config, "display_timezone", "") or "UTC"),
+            "last_sent_at": None,
+            "last_sent_label": "",
+            "models": {"model_name": "", "extraction_model": "", "reasoning_model": ""},
+            "recommendations": [],
+            "all_recommendations": [],
+            "previous_recommendations": [],
+            "recommendation_changes": [],
+            "recommendation_fingerprint": "",
+            "pnl_summary": {},
+            "live_summary": None,
+            "positions": [],
+            "closed_trades": [],
+            "closed_trades_since_last_send": [],
+            "market": {},
+            "_no_recommendations": True,
+        }
 
     previous = (
         db.query(AnalysisResult)
@@ -651,6 +674,10 @@ def process_remote_snapshot_delivery(request_id: str, force: bool = False) -> No
             return
 
         payload = build_remote_snapshot_payload(db, request_id=request_id)
+        # Silently skip when the analysis produced zero recommendations —
+        # there is nothing meaningful to snapshot or deliver.
+        if payload.get("_no_recommendations"):
+            return
         gate = should_send_remote_snapshot(config, payload)
         if not gate["should_send"] and not force:
             record_data_pull(

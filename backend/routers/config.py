@@ -30,11 +30,67 @@ from services.secret_store import (
     clear_telegram_secrets,
     get_telegram_secret_status,
     save_telegram_secrets,
+    get_openai_secret_status,
+    save_openai_api_key,
+    clear_openai_api_key,
+    get_openai_api_key,
 )
 from services.telegram_bot import verify_remote_control
 
 
 router = APIRouter()
+
+
+def _fetch_models_from_backends(config) -> Dict[str, Any]:
+    """Return {'local_models': [...], 'cloud_models': [...]} from all configured backends."""
+    result: Dict[str, List[str]] = {"local_models": [], "cloud_models": []}
+
+    # 1. Local models from Ollama (use DB-stored URL if set, fall back to env var)
+    try:
+        ollama_db_url = str(getattr(config, "ollama_url", "") or "").strip()
+        ollama_url_param = ollama_db_url if ollama_db_url else None
+        ollama = get_ollama_status(timeout=3, ollama_url=ollama_url_param)
+        result["local_models"] = ollama.get("available_models") or []
+    except Exception:
+        result["local_models"] = []
+
+    # 2. Cloud models from OpenAI-compatible endpoint (only if API key is configured)
+    api_key = get_openai_api_key()
+    if api_key:
+        try:
+            from services.openai_client import get_openai_status
+            base_url = str(getattr(config, "openai_base_url", "https://api.openai.com/v1") or "https://api.openai.com/v1")
+            status = get_openai_status(api_key=api_key, base_url=base_url, timeout=5)
+            result["cloud_models"] = status.get("available_models") or []
+        except Exception:
+            result["cloud_models"] = []
+    else:
+        # Also try env var fallback
+        import os
+        env_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if env_key:
+            try:
+                from services.openai_client import get_openai_status
+                base_url = str(getattr(config, "openai_base_url", "https://api.openai.com/v1") or "https://api.openai.com/v1")
+                status = get_openai_status(api_key=env_key, base_url=base_url, timeout=5)
+                result["cloud_models"] = status.get("available_models") or []
+            except Exception:
+                result["cloud_models"] = []
+
+    return result
+
+
+def _merge_models_with_label(local: List[str], cloud: List[str]) -> List[str]:
+    """Merge local and cloud models into a single flat list of raw model IDs.
+    All entries are kept as their original model IDs (no prefix in the value).
+    The caller can cross-reference against local_models / cloud_models to determine origin."""
+    seen: set = set()
+    merged: List[str] = []
+    for m in local + cloud:
+        if m not in seen:
+            seen.add(m)
+            merged.append(m)
+    return merged
 
 
 @router.get("/config", tags=["Config"])
@@ -44,12 +100,32 @@ async def get_config(
 ) -> Dict[str, Any]:
     config = get_or_create_app_config(db)
     payload = config_to_dict_with_stats(db, config)
-    try:
-        ollama = get_ollama_status(timeout=3)
-        payload["available_models"] = ollama.get("available_models") or []
-    except Exception:
-        payload["available_models"] = []
+
+    model_info = _fetch_models_from_backends(config)
+    local_models = model_info["local_models"]
+    cloud_models = model_info["cloud_models"]
+
+    payload["local_models"] = local_models
+    payload["cloud_models"] = cloud_models
+    # Legacy flat list for backward compat — merged with local: / cloud: prefix
+    payload["available_models"] = _merge_models_with_label(local_models, cloud_models)
+
     return payload
+
+
+@router.get("/admin/models", tags=["Admin"])
+async def get_admin_models(
+    _admin: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Refresh and return models from all configured backends on demand."""
+    config = get_or_create_app_config(db)
+    model_info = _fetch_models_from_backends(config)
+    return {
+        "local_models": model_info["local_models"],
+        "cloud_models": model_info["cloud_models"],
+        "available_models": _merge_models_with_label(model_info["local_models"], model_info["cloud_models"]),
+    }
 
 
 def _pull_history_background(symbols: List[str]) -> None:
@@ -312,6 +388,48 @@ async def delete_remote_snapshot_secrets(
         return clear_telegram_secrets()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+# ── OpenAI / OpenAI-compatible Cloud LLM Secrets ─────────────────────────
+
+
+@router.get("/admin/openai-secrets", tags=["Admin"])
+async def get_openai_secrets(
+    _admin: None = Depends(require_admin_token),
+) -> Dict[str, Any]:
+    """Return masked status of the OpenAI API key in the OS keychain."""
+    return get_openai_secret_status()
+
+
+@router.put("/admin/openai-secrets", tags=["Admin"])
+async def put_openai_secrets(
+    payload: Dict[str, Any],
+    _admin: None = Depends(require_admin_token),
+) -> Dict[str, Any]:
+    """Store the OpenAI API key in the OS keychain."""
+    try:
+        api_key = str(payload.get("api_key") or "")
+        if not api_key:
+            raise ValueError("OpenAI API key is required")
+        return save_openai_api_key(api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.delete("/admin/openai-secrets", tags=["Admin"])
+async def delete_openai_secrets(
+    _admin: None = Depends(require_admin_token),
+) -> Dict[str, Any]:
+    """Remove the OpenAI API key from the OS keychain."""
+    try:
+        return clear_openai_api_key()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+# ── Remote Snapshot / Data Management ─────────────────────────────────────
 
 
 @router.post("/admin/remote-snapshot-send", tags=["Admin"])

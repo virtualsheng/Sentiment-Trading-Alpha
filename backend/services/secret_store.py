@@ -24,6 +24,9 @@ ALPACA_API_KEY_KEY    = "alpaca_api_key"
 ALPACA_SECRET_KEY_KEY = "alpaca_secret_key"
 ALPACA_MODE_KEY       = "alpaca_trading_mode"   # "paper" | "live"
 
+# OpenAI / OpenAI-compatible cloud LLM
+OPENAI_API_KEY_KEY = "openai_api_key"
+
 
 def _get_keyring_module():
     try:
@@ -230,3 +233,44 @@ def get_alpaca_credentials() -> Dict[str, str]:
     if live["api_key"] and live["secret_key"]:
         return live
     return get_alpaca_credentials_for_mode("paper")
+
+
+# ── OpenAI / OpenAI-compatible Cloud LLM ──────────────────────────────────────
+
+def get_openai_secret_status() -> Dict[str, Any]:
+    """Return masked status of the OpenAI API key in the OS keychain."""
+    try:
+        api_key = _read_secret(OPENAI_API_KEY_KEY)
+        return {
+            "available": True,
+            "configured": bool(api_key),
+            "api_key_masked": _mask_secret(api_key),
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "configured": False,
+            "api_key_masked": "",
+            "error": str(exc),
+        }
+
+
+def save_openai_api_key(api_key: str) -> Dict[str, Any]:
+    """Store the OpenAI API key in the OS keychain."""
+    key = str(api_key or "").strip()
+    if not key:
+        raise ValueError("OpenAI API key is required")
+    _write_secret(OPENAI_API_KEY_KEY, key)
+    return get_openai_secret_status()
+
+
+def clear_openai_api_key() -> Dict[str, Any]:
+    """Remove the OpenAI API key from the OS keychain."""
+    _delete_secret(OPENAI_API_KEY_KEY)
+    return get_openai_secret_status()
+
+
+def get_openai_api_key() -> str:
+    """Return the raw OpenAI API key from the OS keychain, or empty string."""
+    return _read_secret(OPENAI_API_KEY_KEY)

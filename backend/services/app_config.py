@@ -49,7 +49,9 @@ VALID_REMOTE_SNAPSHOT_MODES = {"telegram"}
 DEFAULT_ALPACA_EXECUTION_MODE = "off"
 VALID_ALPACA_EXECUTION_MODES = {"off", "paper", "live"}
 DEFAULT_INFERENCE_BACKEND = "ollama"
-VALID_INFERENCE_BACKENDS = {"ollama", "vllm"}
+VALID_INFERENCE_BACKENDS = {"ollama", "vllm", "openai"}
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 MAX_CUSTOM_SYMBOLS = 50
 MAX_CUSTOM_RSS_FEEDS = 3
 MAX_TRACKED_SYMBOLS = len(DEFAULT_TRACKED_SYMBOLS) + MAX_CUSTOM_SYMBOLS
@@ -695,6 +697,16 @@ def get_or_create_app_config(db: Session) -> AppConfig:
         if getattr(config, "alpaca_live_trading_enabled", None) != (normalized_execution_mode == "live"):
             config.alpaca_live_trading_enabled = normalized_execution_mode == "live"
             changed = True
+        # ── Preserve admin-configured OpenAI/cloud LLM fields across restarts ──
+        # These must NOT be overwritten by DB defaults when a column migration
+        # adds them to an existing row. Only set the default if the value is
+        # genuinely unset (None), not if it already holds a user-chosen URL/model.
+        if getattr(config, "openai_base_url", None) is None:
+            config.openai_base_url = DEFAULT_OPENAI_BASE_URL
+            changed = True
+        if getattr(config, "openai_model", None) is None:
+            config.openai_model = DEFAULT_OPENAI_MODEL
+            changed = True
         if getattr(config, "remote_snapshot_enabled", None) is None:
             config.remote_snapshot_enabled = False
             changed = True
@@ -911,6 +923,21 @@ def update_app_config(db: Session, payload: Dict[str, Any]) -> AppConfig:
         config.red_team_enabled = bool(payload.get("red_team_enabled"))
     if "inference_backend" in payload:
         config.inference_backend = _normalize_inference_backend(payload.get("inference_backend"))
+    if "ollama_url" in payload:
+        config.ollama_url = str(payload.get("ollama_url") or "").strip() or "http://localhost:11434/api/generate"
+    if "vllm_url" in payload:
+        config.vllm_url = str(payload.get("vllm_url") or "").strip() or "http://localhost:8000"
+    if "openai_base_url" in payload:
+        raw = str(payload.get("openai_base_url") or "").strip()
+        # Validate with the same logic as openai_client._validate_base_url
+        from services.openai_client import _validate_base_url as _validate_openai_url
+        try:
+            normalized = _validate_openai_url(raw) if raw else DEFAULT_OPENAI_BASE_URL
+        except ValueError:
+            normalized = getattr(config, "openai_base_url", DEFAULT_OPENAI_BASE_URL)
+        config.openai_base_url = normalized
+    if "openai_model" in payload:
+        config.openai_model = str(payload.get("openai_model") or "").strip() or DEFAULT_OPENAI_MODEL
     if "risk_profile" in payload:
         config.risk_profile = _normalize_risk_profile(payload.get("risk_profile"))
     if "risk_policy" in payload:
@@ -1152,7 +1179,12 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
     )
 
     if auto_run_enabled and config.last_analysis_started_at:
-        next_run_at = config.last_analysis_started_at + timedelta(minutes=auto_run_interval_minutes)
+        # Ensure the stored timestamp is timezone-aware — SQLite may return
+        # offset-naive datetimes depending on how they were originally stored.
+        started_at = config.last_analysis_started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        next_run_at = started_at + timedelta(minutes=auto_run_interval_minutes)
         remaining = int((next_run_at - datetime.now(timezone.utc)).total_seconds())
         seconds_until_next = max(0, remaining)
         can_auto_run_now = seconds_until_next == 0
@@ -1209,6 +1241,10 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "ollama_parallel_slots": int(getattr(config, "ollama_parallel_slots", 1) or 1),
         "red_team_enabled": bool(getattr(config, "red_team_enabled", True)),
         "inference_backend": _normalize_inference_backend(getattr(config, "inference_backend", DEFAULT_INFERENCE_BACKEND)),
+        "ollama_url": str(getattr(config, "ollama_url", "http://localhost:11434/api/generate") or "http://localhost:11434/api/generate"),
+        "vllm_url": str(getattr(config, "vllm_url", "http://localhost:8000") or "http://localhost:8000"),
+        "openai_base_url": str(getattr(config, "openai_base_url", DEFAULT_OPENAI_BASE_URL) or DEFAULT_OPENAI_BASE_URL),
+        "openai_model": str(getattr(config, "openai_model", DEFAULT_OPENAI_MODEL) or DEFAULT_OPENAI_MODEL),
         "risk_profile": _normalize_risk_profile(getattr(config, "risk_profile", DEFAULT_RISK_PROFILE)),
         "risk_policy": _normalize_risk_policy(getattr(config, "risk_policy", {})),
         "web_research_enabled": bool(getattr(config, "web_research_enabled", False)),

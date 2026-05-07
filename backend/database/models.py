@@ -344,8 +344,18 @@ class AppConfig(Base):
     # per analysis at the cost of losing the bias/risk countercheck.
     red_team_enabled = Column(Boolean, nullable=False, default=True)
     # LLM inference backend. "ollama" uses /api/generate; "vllm" uses the
-    # OpenAI-compatible /v1/completions API (set VLLM_URL to point at it).
+    # OpenAI-compatible /v1/completions API (set VLLM_URL to point at it);
+    # "openai" uses the chat completions API via services/openai_client.py.
     inference_backend = Column(String(16), nullable=False, default="ollama")
+    # URL overrides for each inference backend.
+    # When set (non-empty), these override the corresponding env var.
+    # When empty, the engine falls back to the env var, then the hardcoded default.
+    ollama_url = Column(String(256), nullable=False, default="http://localhost:11434/api/generate")
+    vllm_url = Column(String(256), nullable=False, default="http://localhost:8000")
+    # OpenAI / OpenAI-compatible cloud LLM settings.
+    # API key is stored in the OS keychain via secret_store.py, not in the DB.
+    openai_base_url = Column(String(256), nullable=False, default="https://api.openai.com/v1")
+    openai_model = Column(String(128), nullable=False, default="gpt-4o-mini")
     risk_profile = Column(String(20), nullable=False, default="standard")
     risk_policy = Column(JSON, nullable=False, default={})
     web_research_enabled = Column(Boolean, nullable=False, default=False)

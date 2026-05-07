@@ -1046,6 +1046,9 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
             "pre_existing_qty": float(live_qty or 0.0) if same_direction_live else 0.0,
             "pre_existing_side": live_side if same_direction_live else None,
         }
+    elif event == "close":
+        # Closing a direct short means buying back to cover; everything else is a sell
+        side = "buy" if direct_short else "sell"
 
     if execution_mode == "live":
         _conviction = str(getattr(paper_trade, "conviction_level", "MEDIUM") or "MEDIUM").upper()
@@ -1086,8 +1089,6 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
                 "no successful open order on record"
             )
             return
-        # Closing a direct short means buying back to cover; everything else is a sell
-        side = "buy" if direct_short else "sell"
     else:
         return
 

@@ -20,6 +20,7 @@ import { SystemSection } from "@/components/admin/sections/SystemSection";
 import { RemoteSnapshotSection } from "@/components/admin/sections/RemoteSnapshotSection";
 import { BrokerageSection } from "@/components/admin/sections/BrokerageSection";
 import { PriceHistorySection } from "@/components/admin/sections/PriceHistorySection";
+import { CloudLLMSection } from "@/components/admin/sections/CloudLLMSection";
 
 // Modals
 import { DangerZoneModal } from "@/components/admin/modals/DangerZoneModal";
@@ -40,7 +41,7 @@ type AlpacaStatus = {
     secrets: {
         configured: boolean;
         paper: { configured: boolean; api_key_masked: string };
-        live:  { configured: boolean; api_key_masked: string };
+        live: { configured: boolean; api_key_masked: string };
         error: string;
     };
     execution_mode: "off" | "paper" | "live";
@@ -171,25 +172,25 @@ export default function AdminPage() {
         tagline: string;
         pipeline: string;
     }> = [
-        {
-            key: "light",
-            label: "Light",
-            tagline: "Fast single-model run",
-            pipeline: "One model handles both entity mapping and reasoning — fastest turnaround.",
-        },
-        {
-            key: "normal",
-            label: "Normal",
-            tagline: "Balanced, configurable",
-            pipeline: "Optionally split entity mapping and reasoning across two models. Falls back to single-model if only one is configured.",
-        },
-        {
-            key: "detailed",
-            label: "Detailed",
-            tagline: "Full two-model pipeline",
-            pipeline: "Always runs Stage 1 entity mapping then Stage 2 reasoning. Requires both models to be set.",
-        },
-    ];
+            {
+                key: "light",
+                label: "Light",
+                tagline: "Fast single-model run",
+                pipeline: "One model handles both entity mapping and reasoning — fastest turnaround.",
+            },
+            {
+                key: "normal",
+                label: "Normal",
+                tagline: "Balanced, configurable",
+                pipeline: "Optionally split entity mapping and reasoning across two models. Falls back to single-model if only one is configured.",
+            },
+            {
+                key: "detailed",
+                label: "Detailed",
+                tagline: "Full two-model pipeline",
+                pipeline: "Always runs Stage 1 entity mapping then Stage 2 reasoning. Requires both models to be set.",
+            },
+        ];
     const sectionOptions = [
         { value: "overview", label: "Overview", description: "Risk profile, depth, models, and pipeline posture." },
         { value: "trading", label: "Trading + Execution", description: "Guardrails and Alpaca routing." },
@@ -204,39 +205,39 @@ export default function AdminPage() {
         maxLeverage: string;
         color: string;
     }> = [
-        {
-            key: "conservative",
-            label: "Conservative",
-            tagline: "1x, inverse ETFs for bearish",
-            description: "Bullish signals buy the underlying at 1x. Bearish signals use the inverse ETF (e.g. SQQQ) at 1x position sizing — no shorting, no leverage amplification.",
-            maxLeverage: "1x position, inverse ETFs allowed",
-            color: "blue",
-        },
-        {
-            key: "standard",
-            label: "Standard",
-            tagline: "Balanced default",
-            description: "The baseline profile tuned for broad conditions with controlled leverage and defaults.",
-            maxLeverage: "2x at >75% confidence",
-            color: "teal",
-        },
-        {
-            key: "crazy",
-            label: "Crazy",
-            tagline: "3x always",
-            description: "Maximum leverage on every recommendation regardless of confidence. Not for the faint-hearted.",
-            maxLeverage: "3x always",
-            color: "rose",
-        },
-        {
-            key: "custom",
-            label: "Custom",
-            tagline: "Tune everything",
-            description: "Unlocks strategy and Alpaca guardrail controls in one modal.",
-            maxLeverage: "User-defined overrides",
-            color: "amber",
-        },
-    ];
+            {
+                key: "conservative",
+                label: "Conservative",
+                tagline: "1x, inverse ETFs for bearish",
+                description: "Bullish signals buy the underlying at 1x. Bearish signals use the inverse ETF (e.g. SQQQ) at 1x position sizing — no shorting, no leverage amplification.",
+                maxLeverage: "1x position, inverse ETFs allowed",
+                color: "blue",
+            },
+            {
+                key: "standard",
+                label: "Standard",
+                tagline: "Balanced default",
+                description: "The baseline profile tuned for broad conditions with controlled leverage and defaults.",
+                maxLeverage: "2x at >75% confidence",
+                color: "teal",
+            },
+            {
+                key: "crazy",
+                label: "Crazy",
+                tagline: "3x always",
+                description: "Maximum leverage on every recommendation regardless of confidence. Not for the faint-hearted.",
+                maxLeverage: "3x always",
+                color: "rose",
+            },
+            {
+                key: "custom",
+                label: "Custom",
+                tagline: "Tune everything",
+                description: "Unlocks strategy and Alpaca guardrail controls in one modal.",
+                maxLeverage: "User-defined overrides",
+                color: "amber",
+            },
+        ];
     const handleSelectRiskProfile = useCallback((profile: string) => {
         setConfig((current) => ({ ...current, risk_profile: profile }));
         if (profile === "custom") {
@@ -954,11 +955,10 @@ export default function AdminPage() {
                                 key={opt.value}
                                 type="button"
                                 onClick={() => selectSection(opt.value)}
-                                className={`block w-full text-left py-3 px-3 rounded-xl text-sm transition-colors ${
-                                    selectedSection === opt.value
-                                        ? "bg-slate-800 text-white shadow-inner"
-                                        : "text-slate-300 hover:bg-slate-800/80 hover:text-white"
-                                }`}
+                                className={`block w-full text-left py-3 px-3 rounded-xl text-sm transition-colors ${selectedSection === opt.value
+                                    ? "bg-slate-800 text-white shadow-inner"
+                                    : "text-slate-300 hover:bg-slate-800/80 hover:text-white"
+                                    }`}
                                 aria-current={selectedSection === opt.value ? "page" : undefined}
                             >
                                 <div className="font-medium">{opt.label}</div>
@@ -999,11 +999,10 @@ export default function AdminPage() {
                                 key={opt.value}
                                 type="button"
                                 onClick={() => selectSection(opt.value)}
-                                className={`flex-shrink-0 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                                    selectedSection === opt.value
-                                        ? "border-blue-500 bg-blue-500/10 text-blue-200"
-                                        : "border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800"
-                                }`}
+                                className={`flex-shrink-0 rounded-lg border px-3 py-1.5 text-xs transition-colors ${selectedSection === opt.value
+                                    ? "border-blue-500 bg-blue-500/10 text-blue-200"
+                                    : "border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800"
+                                    }`}
                             >
                                 {opt.label}
                             </button>
@@ -1030,11 +1029,10 @@ export default function AdminPage() {
                                             localStorage.setItem("adminMode", "basic");
                                         }
                                     }}
-                                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
-                                        hasAdvancedCustomizations
-                                            ? "border-amber-700 text-amber-300 hover:bg-amber-950/30"
-                                            : "border-slate-700 text-slate-400 hover:text-white"
-                                    }`}
+                                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${hasAdvancedCustomizations
+                                        ? "border-amber-700 text-amber-300 hover:bg-amber-950/30"
+                                        : "border-slate-700 text-slate-400 hover:text-white"
+                                        }`}
                                 >
                                     {hasAdvancedCustomizations ? "⚠ Has advanced settings" : "Switch to Basic"}
                                 </button>
@@ -1126,6 +1124,11 @@ export default function AdminPage() {
                         )}
                         {selectedSection === "system" && (
                             <>
+                                <CloudLLMSection
+                                    config={config}
+                                    setConfig={setConfig}
+                                    isAdvancedMode={isAdvancedMode}
+                                />
                                 <SystemSection
                                     config={config} setConfig={setConfig}
                                     timeZone={timeZone} setTimeZone={setTimeZone}

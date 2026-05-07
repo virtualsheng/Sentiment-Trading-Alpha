@@ -1247,7 +1247,9 @@ async def analyze_market_stream(request: AnalysisRequest, db: Session = Depends(
         prompt_overrides = config.symbol_prompt_overrides or {}
         timeout_seconds = _analysis_timeout_seconds(config)
         SentimentEngine.configure_parallelism(int(getattr(config, "ollama_parallel_slots", 1) or 1))
-        SentimentEngine.set_backend(str(getattr(config, "inference_backend", "ollama") or "ollama"))
+        backend = str(getattr(config, "inference_backend", "ollama") or "ollama")
+        print(f"Router → SentimentEngine.set_backend({backend!r})")
+        SentimentEngine.set_backend(backend)
         run_marker = str(uuid.uuid4())
         run_marked = False
 

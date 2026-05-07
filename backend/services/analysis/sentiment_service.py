@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from typing import Callable, Awaitable as AwaitableType
 from sqlalchemy.orm import Session
 
 from config.logic_loader import LOGIC
@@ -59,6 +60,12 @@ class SentimentService:
         reasoning_model: Optional[str] = None,
         web_context_by_symbol: Optional[Dict[str, str]] = None,
         symbol_proxy_terms_by_symbol: Optional[Dict[str, List[str]]] = None,
+        openai_base_url: Optional[str] = None,
+        openai_model: Optional[str] = None,
+        ollama_url: Optional[str] = None,
+        vllm_url: Optional[str] = None,
+        *,
+        on_symbol_complete: Optional[Callable[[str, int, int, str, float], AwaitableType[None]]] = None,
     ) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
         """
         Two-stage analysis pipeline.
@@ -67,7 +74,21 @@ class SentimentService:
         Stage 2 (reasoning_model):  per-symbol specialist analysis on filtered articles only.
         Falls back to single-stage (model_name) when orchestration models are not configured.
         """
-        engine = SentimentEngine(model_name=model_name)
+        # Forward admin DB config to the engine so it uses the admin-chosen
+        # base URL, model, and API key instead of only env-var defaults.
+        engine_overrides = {}
+        if ollama_url:
+            engine_overrides["ollama_url"] = ollama_url
+        if vllm_url:
+            engine_overrides["vllm_url"] = vllm_url
+        if openai_base_url:
+            engine_overrides["openai_base_url"] = openai_base_url
+        if openai_model:
+            engine_overrides["openai_model"] = openai_model
+        engine = SentimentEngine(
+            model_name=model_name,
+            overrides=engine_overrides if engine_overrides else None,
+        )
         engine.clear_cache()
         web_context_by_symbol = web_context_by_symbol or {}
         symbol_proxy_terms_by_symbol = {
@@ -84,12 +105,14 @@ class SentimentService:
         stage1_model = extraction_model or model_name
         if stage1_model:
             stage1_started = time.time()
+            print(f"Stage 1: starting keyword gen for {len(symbols)} symbols (model={stage1_model})...")
             stage1_result = await engine.extract_relevant_articles(
                 posts,
                 symbols,
                 stage1_model,
                 persisted_proxy_terms_by_symbol=symbol_proxy_terms_by_symbol,
             )
+            print(f"Stage 1: keyword gen complete — {len(stage1_result['filtered_posts'])}/{len(posts)} articles passed filter")
             stage1_duration_ms = (time.time() - stage1_started) * 1000
             analysis_posts = stage1_result["filtered_posts"]
             proxy_terms_by_symbol = stage1_result["proxy_terms_by_symbol"]
@@ -120,7 +143,9 @@ class SentimentService:
         aggregated = self._build_aggregated_news_context(analysis_posts)
         if not aggregated.strip():
             raise ValueError("No post content available for sentiment analysis")
-        price_context = {**price_context, "source_count": len(analysis_posts)}
+        # Do NOT set a global source_count here — each symbol gets its own
+        # per-symbol article count from posts_by_symbol in _analyze_symbol.
+        # A global count would make every symbol's confidence converge.
 
         # Per-symbol article subsets from Stage 1. Each symbol's specialist only
         # sees articles that matched its own proxy terms (chips/AI/export bans for
@@ -133,9 +158,11 @@ class SentimentService:
         # ── Stage 2: per-symbol reasoning ────────────────────────────────────────
         effective_reasoning_model = reasoning_model or model_name
         stage2_started = time.time()
+        stage2_symbol_count = len(symbols)
 
-        async def _analyze_symbol(symbol: str) -> SentimentAnalysisResponse:
+        async def _analyze_symbol(symbol: str, index: int) -> SentimentAnalysisResponse:
             sym_posts = posts_by_symbol.get(symbol)
+            print(f"Stage 2 [{index+1}/{stage2_symbol_count}]: analyzing {symbol}...")
             # Skip the LLM entirely when no articles matched this symbol —
             # saves tokens and produces a clear "no data" message instead of boilerplate.
             if sym_posts is not None and len(sym_posts) == 0:
@@ -171,7 +198,10 @@ class SentimentService:
                             "source_count": 0,
                         },
                     )
-            return await engine.analyze(
+            # Extract per-symbol technical indicators for confidence modulation
+            tech_indicators_key = f"technical_indicators_{symbol.lower()}"
+            per_symbol_tech_indicators = price_context.get(tech_indicators_key) or {}
+            result = await engine.analyze(
                 text=self._build_symbol_specific_news_context(
                     sym_posts if sym_posts is not None else analysis_posts,
                     symbol,
@@ -183,6 +213,7 @@ class SentimentService:
                 context_data={
                     **self._build_symbol_specific_price_context(price_context, symbol),
                     "source_count": len(sym_posts or []) or len(analysis_posts),
+                    "technical_indicators": per_symbol_tech_indicators,
                 },
                 specialist_symbol=symbol,
                 specialist_focus=self._symbol_specialist_focus(symbol, prompt_overrides),
@@ -192,8 +223,26 @@ class SentimentService:
                 ),
                 web_research_context=web_context_by_symbol.get(symbol, ""),
             )
+            print(f"Stage 2 [{index+1}/{stage2_symbol_count}]: {symbol} done — signal={getattr(result, 'signal_type', '?')} score={getattr(result, 'confidence', 0.0):.2f}")
+            return result
 
-        analyses = await asyncio.gather(*[_analyze_symbol(symbol) for symbol in symbols])
+        async def _analyze_with_progress(symbol: str, index: int) -> SentimentAnalysisResponse:
+            result = await _analyze_symbol(symbol, index)
+            if on_symbol_complete is not None:
+                try:
+                    await on_symbol_complete(
+                        symbol,
+                        index + 1,
+                        stage2_symbol_count,
+                        getattr(result, 'signal_type', 'HOLD'),
+                        getattr(result, 'confidence', 0.0),
+                    )
+                except Exception:
+                    pass
+            return result
+
+        analyses = await asyncio.gather(*[_analyze_with_progress(symbol, i) for i, symbol in enumerate(symbols)])
+        print(f"Stage 2: all symbols complete ({len(symbols)} symbols in {(time.time() - stage2_started)*1000:.0f}ms)")
         stage2_duration_ms = (time.time() - stage2_started) * 1000
         results: Dict[str, Dict[str, Any]] = {}
 
@@ -493,6 +542,9 @@ class SentimentService:
         symbol_company_aliases: Optional[Dict[str, str]] = None,
     ) -> tuple[Dict[str, str], Dict[str, List[Dict[str, str]]]]:
         if not enabled:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("Web research skipped — web_research_enabled is False in app config")
             return {}, {}
 
         results = await asyncio.gather(*[

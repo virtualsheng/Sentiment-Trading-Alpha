@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { AppConfig } from "@/lib/utils/config-normalizer";
 
 type ModelsSectionProps = {
@@ -14,9 +15,48 @@ type ModelsSectionProps = {
     }>;
 };
 
+/** Build a display label for a model, tagging with (local) or (cloud) origin. */
+function modelLabel(model: string, allModels: { value: string; label: string }[]): string {
+    const found = allModels.find((m) => m.value === model);
+    return found ? found.label : model;
+}
+
 export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, depthOptions }: ModelsSectionProps) {
-    const hasModels = config.available_models.length > 0;
+    const localSet = useMemo(() => new Set(config.local_models), [config.local_models]);
+    const cloudSet = useMemo(() => new Set(config.cloud_models), [config.cloud_models]);
+
+    // Build labeled options: local first, then cloud, deduplicated by model ID
+    const modelOptions = useMemo(() => {
+        const seen = new Set<string>();
+        const result: { value: string; label: string }[] = [];
+        for (const m of config.local_models) {
+            if (!seen.has(m)) {
+                seen.add(m);
+                result.push({ value: m, label: `(local) ${m}` });
+            }
+        }
+        for (const m of config.cloud_models) {
+            if (!seen.has(m)) {
+                seen.add(m);
+                result.push({ value: m, label: `(cloud) ${m}` });
+            }
+        }
+        return result;
+    }, [config.local_models, config.cloud_models]);
+
+    const hasModels = modelOptions.length > 0 || config.available_models.length > 0;
+    const hasLocal = config.local_models.length > 0;
+    const hasCloud = config.cloud_models.length > 0;
     const isVllm = config.inference_backend === "vllm";
+    const isOllama = config.inference_backend === "ollama";
+    const isOpenai = config.inference_backend === "openai";
+
+    // For Ollama/vLLM: show flag if no models found, for Cloud: show note to configure in LLM section
+    const noModelsMessage = isOpenai
+        ? "Configure a Cloud LLM API key in the LLM Configuration section above to see cloud models."
+        : isVllm
+            ? "No vLLM models detected — make sure vLLM is running and VLLM_URL is set correctly."
+            : "No Ollama models detected — make sure Ollama is running.";
 
     return (
         <section id="models" className="scroll-mt-24 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-5">
@@ -27,51 +67,23 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
                 </p>
             </div>
 
-            {/* Inference backend selector */}
-            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 space-y-3">
-                <div>
-                    <p className="text-xs font-semibold text-slate-300">Inference Backend</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                        Ollama serves models locally via its own API. vLLM uses an OpenAI-compatible endpoint — set{" "}
-                        <code className="text-slate-400">VLLM_URL</code> (default: http://localhost:8000).
-                    </p>
-                </div>
-                <div className="flex gap-2">
-                    {(["ollama", "vllm"] as const).map((backend) => (
-                        <button
-                            key={backend}
-                            onClick={() => setConfig((c) => ({ ...c, inference_backend: backend }))}
-                            className={`px-4 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                                config.inference_backend === backend
-                                    ? "bg-blue-600 border-blue-500 text-white"
-                                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600"
-                            }`}
-                        >
-                            {backend === "ollama" ? "Ollama" : "vLLM"}
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-                <label className="flex items-start gap-3 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        checked={config.web_research_enabled}
-                        onChange={(e) => setConfig((current) => ({ ...current, web_research_enabled: e.target.checked }))}
-                        className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
-                    />
-                    <span className="block">
-                        <span className="text-sm font-semibold text-slate-200">Light Web Research</span>
-                        <span className="block mt-1 text-xs text-slate-400 leading-relaxed">
-                            Fetch up to a few recent trusted web headlines per active symbol and inject them into the specialist prompt.
-                            This is intentionally lightweight and meant for custom names like `NVDA` without pulling a huge feed universe.
-                        </span>
-                        <span className="block mt-2 text-[11px] text-slate-500">
-                            Snapshot reruns reuse the saved web context so model comparisons stay fair.
-                        </span>
+            {/* Model source indicator */}
+            <div className="flex flex-wrap gap-3 text-[11px]">
+                {hasLocal && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-900/40 text-blue-300 border border-blue-800/50">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                        Local models: {config.local_models.length}
                     </span>
-                </label>
+                )}
+                {hasCloud && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800/50">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                        Cloud models: {config.cloud_models.length}
+                    </span>
+                )}
+                {!hasLocal && !hasCloud && (
+                    <span className="text-amber-400 italic text-xs">{noModelsMessage}</span>
+                )}
             </div>
 
             {hasModels ? (
@@ -90,15 +102,15 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
                                 className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
                             >
                                 <option value="">— use active Ollama model —</option>
-                                {config.available_models.map((m) => (
-                                    <option key={m} value={m}>{m}</option>
+                                {modelOptions.map((opt) => (
+                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
                                 ))}
                             </select>
                         </label>
                         {config.extraction_model && (
                             <div className="rounded-xl border border-slate-700/50 bg-slate-950/60 px-4 py-3 text-xs text-slate-400 space-y-0.5">
-                                <p><span className="text-slate-500">Stage 1 (entity mapping) — </span>{config.extraction_model}</p>
-                                <p><span className="text-slate-500">Stage 2 (reasoning) — </span>{config.extraction_model}</p>
+                                <p><span className="text-slate-500">Stage 1 (entity mapping) — </span>{modelLabel(config.extraction_model, modelOptions)}</p>
+                                <p><span className="text-slate-500">Stage 2 (reasoning) — </span>{modelLabel(config.extraction_model, modelOptions)}</p>
                             </div>
                         )}
                     </div>
@@ -122,8 +134,8 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
                                     className={`mt-2 w-full rounded-lg border px-3 py-2 text-sm text-white outline-none focus:border-blue-400 bg-slate-800 ${!config.extraction_model ? "border-amber-700/60" : "border-slate-700"}`}
                                 >
                                     <option value="">— choose a model —</option>
-                                    {config.available_models.map((m) => (
-                                        <option key={m} value={m}>{m}</option>
+                                    {modelOptions.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
                                     ))}
                                 </select>
                             </label>
@@ -139,8 +151,8 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
                                     className={`mt-2 w-full rounded-lg border px-3 py-2 text-sm text-white outline-none focus:border-blue-400 bg-slate-800 ${!config.reasoning_model ? "border-amber-700/60" : "border-slate-700"}`}
                                 >
                                     <option value="">— choose a model —</option>
-                                    {config.available_models.map((m) => (
-                                        <option key={m} value={m}>{m}</option>
+                                    {modelOptions.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
                                     ))}
                                 </select>
                             </label>
@@ -148,8 +160,8 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
                         {config.extraction_model && config.reasoning_model && (
                             <div className="rounded-xl border border-blue-800/40 bg-blue-500/5 px-4 py-3 text-xs text-slate-300 space-y-0.5">
                                 <p className="font-semibold text-blue-300 mb-1">Two-stage pipeline ready</p>
-                                <p><span className="text-slate-500">Stage 1 — </span>{config.extraction_model}</p>
-                                <p><span className="text-slate-500">Stage 2 — </span>{config.reasoning_model}</p>
+                                <p><span className="text-slate-500">Stage 1 — </span>{modelLabel(config.extraction_model, modelOptions)}</p>
+                                <p><span className="text-slate-500">Stage 2 — </span>{modelLabel(config.reasoning_model, modelOptions)}</p>
                             </div>
                         )}
                     </div>
@@ -158,7 +170,7 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
                     <div className="space-y-4">
                         <p className="text-xs text-slate-400">
                             Normal mode runs two-stage when both models are set, single-stage otherwise.
-                            Leave blank to use whichever Ollama model is currently active.
+                            Leave blank to use whichever model is currently active.
                         </p>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                             <label className="block">
@@ -169,9 +181,9 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
                                     onChange={(e) => setConfig((c) => ({ ...c, extraction_model: e.target.value }))}
                                     className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
                                 >
-                                    <option value="">— use active Ollama model —</option>
-                                    {config.available_models.map((m) => (
-                                        <option key={m} value={m}>{m}</option>
+                                    <option value="">— use active model —</option>
+                                    {modelOptions.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
                                     ))}
                                 </select>
                             </label>
@@ -183,9 +195,9 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
                                     onChange={(e) => setConfig((c) => ({ ...c, reasoning_model: e.target.value }))}
                                     className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
                                 >
-                                    <option value="">— use active Ollama model —</option>
-                                    {config.available_models.map((m) => (
-                                        <option key={m} value={m}>{m}</option>
+                                    <option value="">— use active model —</option>
+                                    {modelOptions.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
                                     ))}
                                 </select>
                             </label>
@@ -195,8 +207,8 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
                                 {config.extraction_model && config.reasoning_model ? (
                                     <>
                                         <p className="font-semibold text-blue-300 mb-1">Two-stage pipeline active</p>
-                                        <p><span className="text-slate-500">Stage 1 — </span>{config.extraction_model}</p>
-                                        <p><span className="text-slate-500">Stage 2 — </span>{config.reasoning_model}</p>
+                                        <p><span className="text-slate-500">Stage 1 — </span>{modelLabel(config.extraction_model, modelOptions)}</p>
+                                        <p><span className="text-slate-500">Stage 2 — </span>{modelLabel(config.reasoning_model, modelOptions)}</p>
                                     </>
                                 ) : (
                                     <p className="text-amber-400">Single-stage mode — set both models to enable two-stage pipeline.</p>
@@ -209,7 +221,9 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
                 <p className="text-xs text-amber-400 italic">
                     {isVllm
                         ? "No vLLM models detected — make sure vLLM is running and VLLM_URL is set correctly."
-                        : "No Ollama models detected — make sure Ollama is running."}
+                        : isOpenai
+                            ? "Configure a Cloud LLM API key in the LLM Configuration section above to see cloud models."
+                            : "No Ollama models detected — make sure Ollama is running."}
                 </p>
             )}
         </section>

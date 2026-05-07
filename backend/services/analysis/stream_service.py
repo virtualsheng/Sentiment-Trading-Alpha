@@ -181,6 +181,8 @@ class StreamService:
                 reasoning_model=reasoning_model,
                 web_context_by_symbol=web_context_by_symbol,
                 symbol_proxy_terms_by_symbol=dict(getattr(config, "symbol_proxy_terms", {}) or {}),
+                openai_base_url=getattr(config, "openai_base_url", None),
+                openai_model=getattr(config, "openai_model", None),
             )
         )
         while True:

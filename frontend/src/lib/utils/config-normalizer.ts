@@ -31,6 +31,10 @@ export type AppConfig = {
     reasoning_model: string;
     ollama_parallel_slots: number;
     inference_backend: string;
+    ollama_url: string;
+    vllm_url: string;
+    openai_base_url: string;
+    openai_model: string;
     red_team_enabled: boolean;
     risk_profile: string;
     risk_policy?: {
@@ -85,6 +89,8 @@ export type AppConfig = {
         min_same_day_exit_edge_pct: number;
     };
     available_models: string[];
+    local_models: string[];
+    cloud_models: string[];
     last_analysis_started_at: string | null;
     last_analysis_completed_at: string | null;
     last_analysis_request_id: string | null;
@@ -150,6 +156,10 @@ export const EMPTY_CONFIG: AppConfig = {
     reasoning_model: "",
     ollama_parallel_slots: 1,
     inference_backend: "ollama",
+    ollama_url: "http://localhost:11434/api/generate",
+    vllm_url: "http://localhost:8000",
+    openai_base_url: "https://api.openai.com/v1",
+    openai_model: "gpt-4o-mini",
     red_team_enabled: true,
     risk_profile: "standard",
     risk_policy: {
@@ -202,6 +212,8 @@ export const EMPTY_CONFIG: AppConfig = {
         min_same_day_exit_edge_pct: 0.5,
     },
     available_models: [],
+    local_models: [],
+    cloud_models: [],
     last_analysis_started_at: null,
     last_analysis_completed_at: null,
     last_analysis_request_id: null,
@@ -292,6 +304,8 @@ export function normalizeConfigPayload(payload: Partial<AppConfig> | null | unde
         telegram_remote_control_banner_message: String(next.telegram_remote_control_banner_message || ""),
         telegram_remote_control_banner_updated_at: next.telegram_remote_control_banner_updated_at || null,
         available_models: Array.isArray(next.available_models) ? next.available_models : [],
+        local_models: Array.isArray(next.local_models) ? next.local_models : [],
+        cloud_models: Array.isArray(next.cloud_models) ? next.cloud_models : [],
         supported_symbols: Array.isArray(next.supported_symbols) ? next.supported_symbols : EMPTY_CONFIG.supported_symbols,
         default_rss_feeds: Array.isArray(next.default_rss_feeds) ? next.default_rss_feeds : [],
         custom_rss_feeds: Array.isArray(next.custom_rss_feeds) ? next.custom_rss_feeds : [],

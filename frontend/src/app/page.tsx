@@ -119,7 +119,6 @@ export default function Home() {
     const [showCompletedProgressUntil, setShowCompletedProgressUntil] = useState<number | null>(null);
     const [restoringLastResult, setRestoringLastResult] = useState(true);
     const [signalLogicExpanded, setSignalLogicExpanded] = useState(false);
-    const [logExpanded, setLogExpanded] = useState(false);
     const articleCounter = useRef(0);
     const autoRunStartedRef = useRef(false);
     const runAttemptedRef = useRef(false);
@@ -582,23 +581,36 @@ export default function Home() {
 
     const errorText = String(error || "");
     const errorLower = errorText.toLowerCase();
+    const isCloudBackend = config.inference_backend === "openai";
     const isModelNotFoundError = errorLower.includes("model not found");
     const isOllamaError = isModelNotFoundError
         || errorLower.includes("ollama api")
         || errorLower.includes("cannot connect to ollama")
         || errorLower.includes("is ollama running")
         || errorLower.includes("ollama endpoint not found");
+    const isCloudError = isCloudBackend && (errorLower.includes("openai") || errorLower.includes("api key") || errorLower.includes("401") || errorLower.includes("authentication"));
     const activeModelLabel = ollamaStatus?.active_model || ollamaStatus?.configured_model || "No model detected";
     const configuredPipelineModel = config.reasoning_model?.trim() || config.extraction_model?.trim() || "";
     const missingModelMatch = errorText.match(/model not found:\s*`?([^`\s]+)`?/i);
     const missingModelName = missingModelMatch?.[1]?.trim() || "";
     const ollamaCommandModel = missingModelName || configuredPipelineModel || ollamaStatus?.active_model || ollamaStatus?.configured_model || "the-first-model-you-served";
     const ollamaHintCommand = isModelNotFoundError ? `ollama pull ${ollamaCommandModel}` : `ollama run ${ollamaCommandModel}`;
-    const errorBannerTitle = isModelNotFoundError
-        ? "Model not available in Ollama"
-        : isOllamaError
-            ? "Ollama runtime issue"
-            : "Error";
+    const cloudHintCommand = isModelNotFoundError
+        ? `Verify the model name "${missingModelName}" is available on your provider and the base URL is correct.`
+        : "Check your API key and base URL in the admin LLM Configuration section.";
+    const isActuallyOllamaError = isOllamaError && !isCloudBackend;
+    const errorBannerTitle = isCloudBackend && isModelNotFoundError
+        ? "Model not found on provider"
+        : isCloudBackend && isCloudError
+            ? "Cloud LLM authentication error"
+            : isModelNotFoundError
+                ? "Model not available in Ollama"
+                : isOllamaError
+                    ? "Ollama runtime issue"
+                    : "Error";
+    const errorBannerBg = isCloudBackend ? "bg-violet-950/60 border-violet-700/50 text-violet-300" : "bg-orange-950/60 border-orange-700/50 text-orange-300";
+    const errorHeaderIcon = isCloudBackend ? "☁️" : "⚠️";
+    const showHint = isOllamaError || isModelNotFoundError || isCloudError;
     const feedCountLabel = `${config.enabled_rss_feeds.length || DEFAULT_APP_CONFIG.enabled_rss_feeds.length} RSS sources`;
     const currentRequestTrades = (pnlSummary?.trades ?? []).filter((trade) => trade.request_id === result?.request_id);
     const selectedTrade = selectedRecommendation
@@ -781,16 +793,58 @@ export default function Home() {
                             </div>
                             <div className="mb-4 rounded-xl border border-slate-700/50 bg-slate-900/50 px-3 py-2 text-xs">
                                 <p className="text-slate-500 uppercase tracking-wider mb-1">Runtime</p>
-                                <p className={ollamaStatus?.reachable ? "text-emerald-300" : "text-orange-300"}>
-                                    {ollamaStatus?.reachable ? "Ollama reachable" : "Waiting for Ollama"}
-                                </p>
-                                <p className="text-slate-400 mt-1">
-                                    {ollamaStatus?.reachable
-                                        ? (config.extraction_model?.trim() && config.reasoning_model?.trim()
-                                            ? `${config.extraction_model} → ${config.reasoning_model}`
-                                            : `Pipeline model: ${configuredPipelineModel || activeModelLabel}`)
-                                        : "The dashboard will use whichever local model Ollama is currently serving."}
-                                </p>
+                                {(() => {
+                                    const isCloud = config.inference_backend === "openai";
+                                    const hasLocal = config.local_models && config.local_models.length > 0;
+                                    const hasCloud = config.cloud_models && config.cloud_models.length > 0;
+                                    const localReachable = ollamaStatus?.reachable;
+                                    const cloudReachable = hasCloud;
+                                    const isHybrid = isCloud && hasLocal;
+                                    if (isHybrid) {
+                                        return (
+                                            <>
+                                                <p className="text-emerald-300">☁️ Cloud LLM connected · {hasCloud} models</p>
+                                                <p className={localReachable ? "text-emerald-300" : "text-orange-300"}>
+                                                    {localReachable ? "🤖 Ollama connected" : "⚠️ Ollama unavailable"}
+                                                </p>
+                                                <p className="text-slate-400 mt-1">
+                                                    {config.extraction_model?.trim() && config.reasoning_model?.trim()
+                                                        ? `${config.extraction_model} → ${config.reasoning_model}`
+                                                        : `Pipeline model: ${configuredPipelineModel || "not set"}`}
+                                                </p>
+                                            </>
+                                        );
+                                    }
+                                    if (isCloud) {
+                                        return (
+                                            <>
+                                                <p className={cloudReachable ? "text-emerald-300" : "text-orange-300"}>
+                                                    {cloudReachable ? "☁️ Connected to cloud" : "☁️ Cloud LLM configured — connect in admin"}
+                                                </p>
+                                                <p className="text-slate-400 mt-1">
+                                                    {cloudReachable
+                                                        ? `${config.openai_model || "gpt-4o-mini"} (default cloud model)`
+                                                        : "Save an API key and click ↻ to load available models."}
+                                                </p>
+                                            </>
+                                        );
+                                    }
+                                    // Ollama-only (default)
+                                    return (
+                                        <>
+                                            <p className={localReachable ? "text-emerald-300" : "text-orange-300"}>
+                                                {localReachable ? "🤖 Ollama reachable" : "Waiting for Ollama"}
+                                            </p>
+                                            <p className="text-slate-400 mt-1">
+                                                {localReachable
+                                                    ? (config.extraction_model?.trim() && config.reasoning_model?.trim()
+                                                        ? `${config.extraction_model} → ${config.reasoning_model}`
+                                                        : `Pipeline model: ${configuredPipelineModel || activeModelLabel}`)
+                                                    : "The dashboard will use whichever local model Ollama is currently serving."}
+                                            </p>
+                                        </>
+                                    );
+                                })()}
                             </div>
                             <button onClick={handleAnalyze} disabled={isAnalyzing}
                                 className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors ${isAnalyzing ? "bg-slate-700 cursor-not-allowed text-slate-400" : "bg-blue-600 hover:bg-blue-500 text-white"
@@ -887,16 +941,23 @@ export default function Home() {
                         <AnimatePresence>
                             {error && (
                                 <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                                    className={`p-4 rounded-xl border flex items-start gap-3 ${isOllamaError
-                                        ? "bg-orange-950/60 border-orange-700/50 text-orange-300"
-                                        : "bg-red-950/60 border-red-700/50 text-red-300"}`}>
-                                    <WifiOff size={16} className="mt-0.5 shrink-0" />
+                                    className={`p-4 rounded-xl border flex items-start gap-3 ${isCloudBackend || isCloudError
+                                        ? "bg-violet-950/60 border-violet-700/50 text-violet-300"
+                                        : isOllamaError
+                                            ? "bg-orange-950/60 border-orange-700/50 text-orange-300"
+                                            : "bg-red-950/60 border-red-700/50 text-red-300"}`}>
+                                    <span className="text-lg mt-0.5 shrink-0">{isCloudBackend ? "☁️" : <WifiOff size={16} />}</span>
                                     <div>
                                         <p className="font-semibold text-sm">{errorBannerTitle}</p>
                                         <p className="text-sm mt-0.5 opacity-80">{error}</p>
-                                        {isOllamaError && (
+                                        {isActuallyOllamaError && (
                                             <code className="text-xs mt-2 block bg-black/40 px-3 py-1.5 rounded font-mono">
                                                 {ollamaHintCommand}
+                                            </code>
+                                        )}
+                                        {isCloudBackend && (isModelNotFoundError || isCloudError) && (
+                                            <code className="text-xs mt-2 block bg-black/40 px-3 py-1.5 rounded font-mono">
+                                                {cloudHintCommand}
                                             </code>
                                         )}
                                     </div>
@@ -1017,6 +1078,17 @@ export default function Home() {
                                             <span>›</span><span className="animate-pulse">▋</span>
                                         </div>
                                     )}
+                                    {/* Pipeline Log — always visible, newest first */}
+                                    {logItems.length > 0 && (
+                                        <div className="mb-3 space-y-0">
+                                            {[...logItems].reverse().map((item, i) => (
+                                                <div key={i} className="flex items-start gap-2 py-0.5 text-xs text-slate-500 font-mono">
+                                                    <span className="text-slate-700 shrink-0">›</span>
+                                                    <span>{item.message}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                     {/* Articles */}
                                     {articleItems.length > 0 && [...articleItems].reverse().map((item, i) => (
                                         <ArticleCard
@@ -1027,29 +1099,6 @@ export default function Home() {
                                             result={result}
                                         />
                                     ))}
-                                    {/* Pipeline Log (collapsible) */}
-                                    {logItems.length > 0 && (
-                                        <div className="mt-3 pt-3 border-t border-slate-700/30">
-                                            <button
-                                                type="button"
-                                                onClick={() => setLogExpanded((prev) => !prev)}
-                                                className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors"
-                                            >
-                                                <span>{logExpanded ? "▼" : "▶"}</span>
-                                                <span>Pipeline Log ({logItems.length})</span>
-                                            </button>
-                                            {logExpanded && (
-                                                <div className="mt-2 space-y-0">
-                                                    {[...logItems].reverse().map((item, i) => (
-                                                        <div key={i} className="flex items-start gap-2 py-0.5 text-xs text-slate-500 font-mono">
-                                                            <span className="text-slate-700 shrink-0">›</span>
-                                                            <span>{item.message}</span>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
                                 </div>
                             </GlassCard>
                         )}

@@ -283,6 +283,10 @@ export type AppConfig = {
     risk_profile?: string;
     telegram_remote_control_banner_active?: boolean;
     telegram_remote_control_banner_message?: string;
+    inference_backend?: string;
+    local_models?: string[];
+    cloud_models?: string[];
+    openai_model?: string;
     telegram_remote_control_banner_updated_at?: string | null;
 };
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { AppConfig } from "@/lib/utils/config-normalizer";
 
 type DepthOption = {
@@ -34,8 +35,26 @@ const activeColorStyles: Record<string, string> = {
     rose: "border-rose-400 bg-rose-500/10 text-rose-100",
 };
 
+function buildModelOptions(local: string[], cloud: string[]): { value: string; label: string }[] {
+    const seen = new Set<string>();
+    const result: { value: string; label: string }[] = [];
+    for (const m of local) {
+        if (!seen.has(m)) { seen.add(m); result.push({ value: m, label: `(local) ${m}` }); }
+    }
+    for (const m of cloud) {
+        if (!seen.has(m)) { seen.add(m); result.push({ value: m, label: `(cloud) ${m}` }); }
+    }
+    return result;
+}
+
+function modelLabel(model: string, options: { value: string; label: string }[]): string {
+    const found = options.find((m) => m.value === model);
+    return found ? found.label : model;
+}
+
 export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions, depthOptions, onSelectRiskProfile }: OverviewSectionProps) {
-    const hasModels = config.available_models.length > 0;
+    const modelOptions = useMemo(() => buildModelOptions(config.local_models, config.cloud_models), [config.local_models, config.cloud_models]);
+    const hasModels = modelOptions.length > 0;
 
     return (
         <section id="overview" className="scroll-mt-24 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-5">
@@ -51,11 +70,10 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                                 key={option.key}
                                 type="button"
                                 onClick={() => onSelectRiskProfile(option.key)}
-                                className={`rounded-xl border px-4 py-3 text-left transition-colors ${
-                                    isActive
-                                        ? activeColorStyles[option.color]
-                                        : "border-slate-800 bg-slate-950/60 text-slate-300"
-                                }`}
+                                className={`rounded-xl border px-4 py-3 text-left transition-colors ${isActive
+                                    ? activeColorStyles[option.color]
+                                    : "border-slate-800 bg-slate-950/60 text-slate-300"
+                                    }`}
                             >
                                 <p className="text-sm font-semibold">{option.label}</p>
                                 <p className="mt-0.5 text-[11px] text-slate-400 font-medium">{option.tagline}</p>
@@ -76,11 +94,10 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                             key={option.key}
                             type="button"
                             onClick={() => setConfig((c) => ({ ...c, rss_article_detail_mode: option.key }))}
-                            className={`rounded-xl border px-4 py-3 text-left transition-colors ${
-                                config.rss_article_detail_mode === option.key
-                                    ? "border-blue-400 bg-blue-500/10 text-blue-100"
-                                    : "border-slate-800 bg-slate-950/60 text-slate-300"
-                            }`}
+                            className={`rounded-xl border px-4 py-3 text-left transition-colors ${config.rss_article_detail_mode === option.key
+                                ? "border-blue-400 bg-blue-500/10 text-blue-100"
+                                : "border-slate-800 bg-slate-950/60 text-slate-300"
+                                }`}
                         >
                             <p className="text-sm font-semibold">{option.label}</p>
                             <p className="mt-0.5 text-[11px] text-slate-400 font-medium">{option.tagline}</p>
@@ -107,16 +124,16 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                                     onChange={(e) => setConfig((c) => ({ ...c, extraction_model: e.target.value, reasoning_model: "" }))}
                                     className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
                                 >
-                                    <option value="">— use active Ollama model —</option>
-                                    {config.available_models.map((m) => (
-                                        <option key={m} value={m}>{m}</option>
+                                    <option value="">— use active model —</option>
+                                    {modelOptions.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
                                     ))}
                                 </select>
                             </label>
                             {config.extraction_model && (
                                 <div className="rounded-xl border border-slate-700/50 bg-slate-950/60 px-4 py-3 text-xs text-slate-400 space-y-0.5">
-                                    <p><span className="text-slate-500">Stage 1 (entity mapping) — </span>{config.extraction_model}</p>
-                                    <p><span className="text-slate-500">Stage 2 (reasoning) — </span>{config.extraction_model}</p>
+                                    <p><span className="text-slate-500">Stage 1 (entity mapping) — </span>{modelLabel(config.extraction_model, modelOptions)}</p>
+                                    <p><span className="text-slate-500">Stage 2 (reasoning) — </span>{modelLabel(config.extraction_model, modelOptions)}</p>
                                 </div>
                             )}
                         </div>
@@ -139,8 +156,8 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                                         className={`mt-2 w-full rounded-lg border px-3 py-2 text-sm text-white outline-none focus:border-blue-400 bg-slate-800 ${!config.extraction_model ? "border-amber-700/60" : "border-slate-700"}`}
                                     >
                                         <option value="">— choose a model —</option>
-                                        {config.available_models.map((m) => (
-                                            <option key={m} value={m}>{m}</option>
+                                        {modelOptions.map((opt) => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>
                                 </label>
@@ -156,8 +173,8 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                                         className={`mt-2 w-full rounded-lg border px-3 py-2 text-sm text-white outline-none focus:border-blue-400 bg-slate-800 ${!config.reasoning_model ? "border-amber-700/60" : "border-slate-700"}`}
                                     >
                                         <option value="">— choose a model —</option>
-                                        {config.available_models.map((m) => (
-                                            <option key={m} value={m}>{m}</option>
+                                        {modelOptions.map((opt) => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>
                                 </label>
@@ -165,8 +182,8 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                             {config.extraction_model && config.reasoning_model && (
                                 <div className="rounded-xl border border-blue-800/40 bg-blue-500/5 px-4 py-3 text-xs text-slate-300 space-y-0.5">
                                     <p className="font-semibold text-blue-300 mb-1">Two-stage pipeline ready</p>
-                                    <p><span className="text-slate-500">Stage 1 — </span>{config.extraction_model}</p>
-                                    <p><span className="text-slate-500">Stage 2 — </span>{config.reasoning_model}</p>
+                                    <p><span className="text-slate-500">Stage 1 — </span>{modelLabel(config.extraction_model, modelOptions)}</p>
+                                    <p><span className="text-slate-500">Stage 2 — </span>{modelLabel(config.reasoning_model, modelOptions)}</p>
                                 </div>
                             )}
                         </div>
@@ -186,9 +203,9 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                                         onChange={(e) => setConfig((c) => ({ ...c, extraction_model: e.target.value }))}
                                         className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
                                     >
-                                        <option value="">— use active Ollama model —</option>
-                                        {config.available_models.map((m) => (
-                                            <option key={m} value={m}>{m}</option>
+                                        <option value="">— use active model —</option>
+                                        {modelOptions.map((opt) => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>
                                 </label>
@@ -200,9 +217,9 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                                         onChange={(e) => setConfig((c) => ({ ...c, reasoning_model: e.target.value }))}
                                         className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
                                     >
-                                        <option value="">— use active Ollama model —</option>
-                                        {config.available_models.map((m) => (
-                                            <option key={m} value={m}>{m}</option>
+                                        <option value="">— use active model —</option>
+                                        {modelOptions.map((opt) => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>
                                 </label>
@@ -212,8 +229,8 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                                     {config.extraction_model && config.reasoning_model ? (
                                         <>
                                             <p className="font-semibold text-blue-300 mb-1">Two-stage pipeline active</p>
-                                            <p><span className="text-slate-500">Stage 1 — </span>{config.extraction_model}</p>
-                                            <p><span className="text-slate-500">Stage 2 — </span>{config.reasoning_model}</p>
+                                            <p><span className="text-slate-500">Stage 1 — </span>{modelLabel(config.extraction_model, modelOptions)}</p>
+                                            <p><span className="text-slate-500">Stage 2 — </span>{modelLabel(config.reasoning_model, modelOptions)}</p>
                                         </>
                                     ) : (
                                         <p className="text-amber-400">Single-stage mode — set both models to enable two-stage pipeline.</p>
@@ -281,11 +298,10 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                                 key={n}
                                 type="button"
                                 onClick={() => setConfig((c) => ({ ...c, max_posts: n }))}
-                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
-                                    config.max_posts === n
-                                        ? "border-blue-400 bg-blue-500/10 text-blue-100 font-semibold"
-                                        : "border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700"
-                                }`}
+                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${config.max_posts === n
+                                    ? "border-blue-400 bg-blue-500/10 text-blue-100 font-semibold"
+                                    : "border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700"
+                                    }`}
                             >
                                 {n}
                             </button>

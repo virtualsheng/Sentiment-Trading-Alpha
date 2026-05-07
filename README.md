@@ -1,6 +1,6 @@
 # Sentiment Trading Alpha
 
-A geopolitical sentiment pipeline that reads the news, reasons about it with a local LLM, and generates trade recommendations for USO, IBIT, QQQ, and SPY — including leveraged execution tickers when confidence is high enough to warrant it. Runs automatically on a user set schedule (default 30 minutes).
+A geopolitical sentiment pipeline that reads the news, reasons about it with a local (or cloud) LLM, and generates trade recommendations for USO, IBIT, QQQ, and SPY — including leveraged execution tickers when confidence is high enough to warrant it. Runs automatically on a user set schedule (default 30 minutes).
 
 > **This is experimental software. It is not financial advice. Do not trade real money with it.**
 
@@ -72,7 +72,7 @@ Bitcoin and oil are capped at 2x leverage.
 
 - **Frontend**: Next.js / React dashboard with a live article feed, signal cards, price panel, health page, trading simulation page, and a snapshot comparison lab.
 - **Backend**: FastAPI serving the analysis pipeline, config, paper trading, and optional Alpaca brokerage routes. All state lives in a local SQLite database.
-- **LLM**: Ollama running locally. No cloud inference required. Tested models: `qwen3.5:9b`, `qwen3:8b`, `0xroyce/plutus:latest`.
+- **LLM**: Ollama (local), vLLM (local OpenAI-compatible), or any OpenAI-compatible cloud provider. Configure the inference backend from the Admin UI. Tested local models: `qwen3.5:9b`, `qwen3:8b`, `0xroyce/plutus:latest`.
 - **Validation data**: EIA petroleum data for USO; FRED M2, TIPS yield, and credit spread data for IBIT, QQQ, and SPY.
 - **Technical indicators**: When price history has been pulled, RSI(14), SMA50/200, MACD, Volume Profile, Bollinger Bands %B, ATR(14), and OBV trend are computed locally and injected into each specialist prompt.
 
@@ -108,6 +108,41 @@ export OLLAMA_URL="http://localhost:11434/api/generate"
 ```
 
 If `OLLAMA_MODEL` is unset, the backend uses whichever model Ollama is currently serving.
+
+### 1b. Cloud LLM (Optional — Alternative to Ollama)
+
+Instead of running Ollama locally, you can use any OpenAI-compatible cloud provider. Configure everything from the Admin UI — no environment variables required.
+
+**Supported providers:** OpenAI, Together AI, Groq, Fireworks, DeepSeek, OpenRouter, and any provider with an OpenAI-compatible chat completions API.
+
+**To configure via the Admin UI:**
+
+1. Start the backend and frontend normally (Ollama is not needed for cloud inference)
+2. Open the Admin page and navigate to **LLM Configuration**
+3. Select **Cloud LLM** as the inference backend
+4. Enter your provider's base URL (e.g. `https://api.openai.com/v1`, `https://openrouter.ai/api/v1`)
+5. Enter your default model (e.g. `gpt-4o-mini`, `gpt-4o`)
+6. Save your API key — it is stored in the OS keychain via `keyring`, never in the repo
+7. Click **Load models** to verify connectivity and see available models
+8. Optionally set separate models for Stage 1 (extraction) and Stage 2 (reasoning) in the **Model Orchestration** section
+
+**Environment variable fallback** (if not set in Admin):
+
+```bash
+# Windows (PowerShell)
+$env:INFERENCE_BACKEND = "openai"
+$env:OPENAI_BASE_URL   = "https://api.openai.com/v1"
+$env:OPENAI_MODEL      = "gpt-4o-mini"
+$env:OPENAI_API_KEY    = "sk-..."
+
+# macOS (zsh/bash)
+export INFERENCE_BACKEND="openai"
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export OPENAI_MODEL="gpt-4o-mini"
+export OPENAI_API_KEY="sk-..."
+```
+
+> **Security note:** The backend enforces HTTPS for public cloud endpoints. HTTP is only allowed for local/private IPs (e.g. `http://localhost:8080`). This prevents API key leakage over unencrypted connections.
 
 ### 2. Start the Backend
 
@@ -188,8 +223,9 @@ Open [http://localhost:3000](http://localhost:3000).
 
 The Admin page is where you configure everything. Changes persist in the database and survive restarts.
 
+- **LLM Configuration** — Choose your inference backend (Ollama, vLLM, or Cloud LLM), configure endpoint URLs, and manage cloud API keys. Cloud LLM settings are stored in the OS keychain via `keyring`.
 - **Analysis Depth** — Light / Normal / Detailed controls article count per feed and pipeline behavior
-- **Model Orchestration** — Stage 1 (extraction) and Stage 2 (reasoning) model selectors; optional Light Web Research toggle
+- **Model Orchestration** — Stage 1 (extraction) and Stage 2 (reasoning) model selectors; optional Light Web Research toggle. When using the Cloud LLM backend, model dropdowns include both local and cloud models.
 - **Trading Logic** — session hours, base trade amount, entry threshold, stop loss, take profit, re-entry cooldown, trailing stop behavior, portfolio cap, and strategy feature toggles (continuous entry sizing, regime adaptation, separate hold decay)
 - **Symbols** — enable/disable default symbols (USO, IBIT, QQQ, SPY); add up to 3 custom symbols
 - **RSS Sources** — enable/disable built-in feeds; add up to 3 custom feeds with display labels

@@ -1,5 +1,5 @@
 """
-Sentiment Engine using Ollama Llama-3-70b
+Sentiment Engine using chosen LLM
 Analyzes geopolitical text for market bluster vs policy changes
 """
 
@@ -157,6 +157,7 @@ class SentimentAnalysisResponse(BaseModel):
 # Persists for the server session so LLM is only called once per symbol.
 _keyword_cache: Dict[str, List[str]] = {}
 _keyword_trace_cache: Dict[str, Dict[str, Any]] = {}
+_large_model_re_cache: Dict[str, bool] = {}  # model name → is_large_model bool
 
 
 class SentimentEngine:
@@ -178,6 +179,10 @@ class SentimentEngine:
     API_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
     INFERENCE_BACKEND = os.getenv("INFERENCE_BACKEND", "ollama").strip().lower()
     VLLM_URL = os.getenv("VLLM_URL", "http://localhost:8000").rstrip("/")
+    # OpenAI / OpenAI-compatible cloud LLM (env var fallbacks when secret store is empty)
+    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 
     # Limit concurrent Ollama requests — local GPU processes one at a time, so parallel
     # requests queue up inside Ollama and each one's HTTP timeout starts ticking from
@@ -205,19 +210,49 @@ class SentimentEngine:
     _cache: Dict[str, SentimentAnalysisResponse] = {}
     _cache_ttl: int = 300  # 5 minutes
 
-    def __init__(self, api_url: Optional[str] = None, model_name: Optional[str] = None):
-        self.api_url = api_url or self.API_URL
+    def __init__(
+        self,
+        api_url: Optional[str] = None,
+        model_name: Optional[str] = None,
+        *,
+        # Optional config overrides from the DB (admin UI settings).
+        # When set (non-empty), these override the corresponding class-level
+        # env-var defaults. Falls back to env var → hardcoded default.
+        overrides: Optional[Dict[str, str]] = None,
+    ):
+        opts = overrides or {}
+        # Ollama URL: DB override → env var → default
+        self.api_url = (
+            (opts.get("ollama_url") or "").strip()
+            or api_url
+            or self.API_URL
+        )
+        # vLLM URL: DB override → env var → default
+        self.vllm_url = (opts.get("vllm_url") or "").strip() or self.VLLM_URL
+        # OpenAI settings: DB override → env var → default
+        openai_base_url = (opts.get("openai_base_url") or "").strip()
+        openai_model = (opts.get("openai_model") or "").strip()
+        openai_api_key = ""
+        if not openai_api_key:
+            try:
+                from services.secret_store import get_openai_api_key
+                openai_api_key = get_openai_api_key()
+            except Exception:
+                pass
+        self.OPENAI_BASE_URL = openai_base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+        self.OPENAI_MODEL = openai_model or os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+        self.OPENAI_API_KEY = openai_api_key or os.getenv("OPENAI_API_KEY", "").strip()
+
         self.model_name = (model_name or self.MODEL_NAME or "").strip()
         self.session = requests.Session()
         self._cache = {}
         self.inference_backend = self.INFERENCE_BACKEND
-        self.vllm_url = self.VLLM_URL
 
     @classmethod
     def set_backend(cls, backend: str) -> None:
         """Switch the active inference backend for all future engine instances."""
         normalized = str(backend or "ollama").strip().lower()
-        cls.INFERENCE_BACKEND = normalized if normalized in {"ollama", "vllm"} else "ollama"
+        cls.INFERENCE_BACKEND = normalized if normalized in {"ollama", "vllm", "openai"} else "ollama"
     
     def clear_cache(self):
         """Clear all cached analysis and LLM-generated keyword results."""
@@ -340,6 +375,9 @@ class SentimentEngine:
                 web_research_context=web_research_context,
             )
 
+        # Store technical indicators for _parse_response to pass to compute_symbol_scores
+        self._last_technical_indicators = context_data.get("technical_indicators") or {}
+
         # Stage 2 specialist calls always target a known symbol — pin Ollama's
         # output to the specialist schema so weaker models can't return free-form
         # JSON that bypasses our scoring fields.
@@ -391,7 +429,11 @@ class SentimentEngine:
         return "noise"
 
     @staticmethod
-    def compute_symbol_scores(extraction: Dict[str, Any], symbol: str) -> Dict[str, Any]:
+    def compute_symbol_scores(
+        extraction: Dict[str, Any],
+        symbol: str,
+        technical_indicators: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Derive calibrated scores from LLM-extracted facts.
         All numerical outputs come from this function — the LLM never outputs raw floats.
@@ -478,6 +520,32 @@ class SentimentEngine:
         min_conf = _ss["confidence_min"] if exposure_type != "UNRELATED" else 0.0
         confidence = round(max(min_conf, min(_ss["confidence_max"], base_conf)), 3)
 
+        # ── Technical confidence modifier: align with traditional TA ──────────
+        # Compute the signal type first (needed for modifier direction), then
+        # apply the modifier. We compute a preliminary signal type here, apply
+        # the tech modifier, then recompute signal type with the adjusted confidence.
+        _prelim_signal = "HOLD"
+        _prelim_allow_bluster = (
+            relevant
+            and exposure_type in {"DIRECT", "INDIRECT"}
+            and direction != "bullish"
+        )
+        if (bluster_score < _ss["bluster_short_threshold"]
+                and policy_score < _ss["policy_signal_threshold"]
+                and _prelim_allow_bluster):
+            _prelim_signal = "SHORT"
+        elif policy_score >= _ss["policy_signal_threshold"] and relevant:
+            if direction == "bullish" and confidence >= _ss["direction_confidence_min"]:
+                _prelim_signal = "LONG"
+            elif direction == "bearish" and confidence >= _ss["direction_confidence_min"]:
+                _prelim_signal = "SHORT"
+
+        tech_modifier = SentimentEngine.compute_technical_confidence_modifier(
+            _prelim_signal, technical_indicators
+        )
+        if tech_modifier != 0.0:
+            confidence = round(max(min_conf, min(_ss["confidence_max"], confidence + tech_modifier)), 3)
+
         # ── Signal type: rule-based from scores and direction ─────────────────
         _min_mag = _ss["directional_score_min_magnitude"]
         # bluster_short_threshold is intentionally more negative than the old -0.35
@@ -535,6 +603,84 @@ class SentimentEngine:
             "exposure_type":    exposure_type,
             "transmission_path": transmission_path,
         }
+
+    @staticmethod
+    def compute_technical_confidence_modifier(
+        signal_type: str,
+        technical_indicators: Optional[Dict[str, Any]],
+    ) -> float:
+        """
+        Compute a confidence modifier based on technical indicator alignment
+        with the signal direction. Returns a value in [-max_total_modifier, +max_total_modifier].
+        """
+        if not technical_indicators or not _L.get("technical_confidence", {}).get("enabled", True):
+            return 0.0
+
+        _tc = _L["technical_confidence"]
+        modifier = 0.0
+        is_long = signal_type.upper() == "LONG"
+        is_short = signal_type.upper() == "SHORT"
+
+        # RSI
+        rsi = technical_indicators.get("rsi_14")
+        if rsi is not None:
+            if rsi > 70:
+                modifier += _tc["rsi_overbought_long_penalty"] if is_long else 0.0
+                modifier += _tc["rsi_overbought_short_bonus"] if is_short else 0.0
+            elif rsi < 30:
+                modifier += _tc["rsi_oversold_long_bonus"] if is_long else 0.0
+                modifier += _tc["rsi_oversold_short_penalty"] if is_short else 0.0
+
+        # SMA cross
+        cross = technical_indicators.get("cross_signal")
+        if cross:
+            if cross == "golden":
+                modifier += _tc["golden_cross_long_bonus"] if is_long else 0.0
+                modifier += _tc["golden_cross_short_penalty"] if is_short else 0.0
+            elif cross == "death":
+                modifier += _tc["death_cross_long_penalty"] if is_long else 0.0
+                modifier += _tc["death_cross_short_bonus"] if is_short else 0.0
+
+        # MACD histogram
+        macd_hist = technical_indicators.get("macd_hist")
+        if macd_hist is not None:
+            if macd_hist > 0:
+                modifier += _tc["macd_positive_long_bonus"] if is_long else 0.0
+                modifier += _tc["macd_positive_short_penalty"] if is_short else 0.0
+            else:
+                modifier += _tc["macd_negative_long_penalty"] if is_long else 0.0
+                modifier += _tc["macd_negative_short_bonus"] if is_short else 0.0
+
+        # Volume ratio
+        vol_ratio = technical_indicators.get("vol_ratio_20")
+        if vol_ratio is not None:
+            if vol_ratio > 1.5:
+                modifier += _tc["volume_high_bonus"]
+            elif vol_ratio < 0.7:
+                modifier += _tc["volume_low_penalty"]
+
+        # Bollinger %B
+        bb_pct = technical_indicators.get("bb_pct_b")
+        if bb_pct is not None:
+            if bb_pct > 0.95:
+                modifier += _tc["bb_above_upper_long_penalty"] if is_long else 0.0
+                modifier += _tc["bb_above_upper_short_bonus"] if is_short else 0.0
+            elif bb_pct < 0.05:
+                modifier += _tc["bb_below_lower_long_bonus"] if is_long else 0.0
+                modifier += _tc["bb_below_lower_short_penalty"] if is_short else 0.0
+
+        # OBV trend
+        obv = technical_indicators.get("obv_trend")
+        if obv:
+            if obv == "rising":
+                modifier += _tc["obv_rising_long_bonus"] if is_long else 0.0
+                modifier += _tc["obv_rising_short_penalty"] if is_short else 0.0
+            elif obv == "falling":
+                modifier += _tc["obv_falling_long_penalty"] if is_long else 0.0
+                modifier += _tc["obv_falling_short_bonus"] if is_short else 0.0
+
+        max_mod = float(_tc.get("max_total_modifier", 0.15))
+        return round(max(-max_mod, min(max_mod, modifier)), 3)
 
     @staticmethod
     def compute_red_team_confidence(
@@ -797,6 +943,17 @@ class SentimentEngine:
         max_tokens: Optional[int] = None,
         response_schema: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        # Cloud backends (OpenAI / vLLM) handle concurrency natively — no semaphore.
+        # The semaphore is only needed for local Ollama (single GPU, one request at a time).
+        if self.inference_backend in ("openai", "vllm"):
+            return await asyncio.to_thread(
+                self._call_ollama_sync,
+                prompt,
+                model_override,
+                force_json,
+                max_tokens,
+                response_schema,
+            )
         async with self._ollama_semaphore:
             return await asyncio.to_thread(
                 self._call_ollama_sync,
@@ -1037,14 +1194,20 @@ class SentimentEngine:
             },
         }
 
-    @staticmethod
-    def _is_large_model(model_name: str) -> bool:
-        """Return True for models ≥ 7B so we can set keep_alive to prevent unloading."""
+    @classmethod
+    def _is_large_model(cls, model_name: str) -> bool:
+        """Return True for models ≥ 7B so we can set keep_alive to prevent unloading.
+        
+        Results are cached per model name to avoid redundant regex scans.
+        """
+        global _large_model_re_cache
+        if model_name in _large_model_re_cache:
+            return _large_model_re_cache[model_name]
         import re
         m = re.search(r"(\d+\.?\d*)b", model_name.lower())
-        if m:
-            return float(m.group(1)) >= 7
-        return False
+        result = bool(m and float(m.group(1)) >= 7)
+        _large_model_re_cache[model_name] = result
+        return result
 
     def _call_ollama_sync(
         self,
@@ -1054,8 +1217,11 @@ class SentimentEngine:
         max_tokens: Optional[int] = None,
         response_schema: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        print(f"SentimentEngine._call_ollama_sync → backend={self.inference_backend!r}, model_override={model_override!r}")
         if self.inference_backend == "vllm":
             return self._call_vllm_sync(prompt, model_override, force_json, max_tokens, response_schema)
+        if self.inference_backend == "openai":
+            return self._call_openai_sync(prompt, model_override, force_json, max_tokens, response_schema)
         model = (model_override or self.model_name or "").strip()
         effective_max_tokens = max_tokens if max_tokens is not None else self.MAX_TOKENS
         # Estimate prompt tokens (4 chars ≈ 1 token for English) and size the KV cache
@@ -1072,6 +1238,7 @@ class SentimentEngine:
                 "temperature": self.TEMPERATURE,
                 "num_predict": effective_max_tokens,
                 "num_ctx": num_ctx,
+                "cache_prompt": True,  # KV-cache reuse across calls with same prompt prefix → ~40-60% prefill reduction
             },
         }
         # A JSON Schema in `format` constrains generation to the schema (Ollama 0.5+).
@@ -1186,6 +1353,77 @@ class SentimentEngine:
         except Exception as e:
             raise Exception(f"vLLM API error: {e}")
 
+    def _call_openai_sync(
+        self,
+        prompt: str,
+        model_override: Optional[str] = None,
+        force_json: bool = False,
+        max_tokens: Optional[int] = None,
+        response_schema: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Call the OpenAI / OpenAI-compatible chat completions API.
+
+        CRITICAL: This NEVER sends `response_schema` (json_schema response_format)
+        because many non-OpenAI providers (OpenRouter, Together, etc.) do not support
+        strict JSON schema mode. Instead we always use force_json=True and let the
+        existing JSON repair pipeline (_sanitize_json / _extract_json_value) handle
+        any formatting issues — it's robust against trailing commas, unclosed
+        brackets, and other common LLM output problems.
+
+        Resolves the API key from (in order of priority):
+        1. Instance-level OPENAI_API_KEY / env var fallback
+        2. Secret store (OS keychain)
+
+        Resolves the model from (in order of priority):
+        1. model_override (passed by the caller)
+        2. Instance-level OPENAI_MODEL / env var fallback
+
+        Resolves the base URL from (in order of priority):
+        1. Instance-level OPENAI_BASE_URL / env var fallback
+        """
+        from services.openai_client import call_openai_chat_sync
+
+        # Resolve API key: try secret store first, then env var
+        api_key = self.OPENAI_API_KEY
+        if not api_key:
+            try:
+                from services.secret_store import get_openai_api_key
+                api_key = get_openai_api_key()
+            except Exception:
+                api_key = ""
+
+        effective_model = (model_override or self.OPENAI_MODEL or "").strip()
+        effective_base_url = (self.OPENAI_BASE_URL or "https://api.openai.com/v1").strip()
+        effective_max_tokens = max_tokens if max_tokens is not None else self.MAX_TOKENS
+
+        print(f"SentimentEngine → cloud backend: model={effective_model}, base_url={effective_base_url}, api_key={'configured' if api_key else 'MISSING'}")
+
+        if not api_key:
+            raise Exception(
+                "OpenAI API key not configured. Set it in the admin UI "
+                "(Settings → Cloud LLM) or via the OPENAI_API_KEY environment variable."
+            )
+        if not effective_model:
+            raise Exception(
+                "OpenAI model not configured. Set it in the admin UI "
+                "(Settings → Cloud LLM) or via the OPENAI_MODEL environment variable."
+            )
+
+        # Always use force_json=True; never pass response_schema (json_schema is
+        # incompatible with most non-OpenAI providers). The downstream JSON repair
+        # pipeline handles model output that deviates from the schema.
+        return call_openai_chat_sync(
+            prompt=prompt,
+            model=effective_model,
+            api_key=api_key,
+            base_url=effective_base_url,
+            force_json=True,
+            response_schema=None,
+            max_tokens=effective_max_tokens,
+            temperature=self.TEMPERATURE,
+            timeout=180,
+        )
+
     def _parse_response(
         self,
         ollama_response: Dict[str, Any],
@@ -1222,7 +1460,8 @@ class SentimentEngine:
             # We need the symbol to score — pull it from symbol_relevance keys or fall back
             sym_keys = list((data.get("symbol_relevance") or {}).keys())
             symbol_for_scoring = sym_keys[0] if sym_keys else ""
-            computed = self.compute_symbol_scores(data, symbol_for_scoring)
+            tech_indicators = getattr(self, "_last_technical_indicators", None) or {}
+            computed = self.compute_symbol_scores(data, symbol_for_scoring, technical_indicators=tech_indicators)
 
             bluster = {
                 "is_bluster": computed["is_bluster"],

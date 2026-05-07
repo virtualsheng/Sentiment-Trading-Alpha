@@ -1,5 +1,64 @@
 # Release Notes — May 7, 2026
 
+## Cloud LLM Support — OpenAI-Compatible Inference Backend
+
+This release adds first-class support for OpenAI and any OpenAI-compatible cloud provider as an inference backend alongside Ollama and vLLM. Users can now run the analysis pipeline against cloud models like GPT-4o, GPT-4o-mini, or any provider with an OpenAI-compatible chat completions API — all configured from the Admin UI.
+
+**Three inference backends:**
+
+- **Ollama** (default) — local GPU inference via Ollama's `/api/generate` endpoint
+- **vLLM** — local OpenAI-compatible servers via `/v1/completions`
+- **Cloud LLM** — any OpenAI-compatible cloud API via `/v1/chat/completions`
+
+The backend selector is a first-class setting in the Admin UI's **LLM Configuration** section. Switching backends requires no restart — the change takes effect on the next analysis run.
+
+**OpenAI-compatible client (`backend/services/openai_client.py`):**
+
+- Wraps the OpenAI Chat Completions API into the same `{"response": "..."}` envelope expected by the existing sentiment engine — all downstream JSON repair, schema validation, and scoring logic works unchanged
+- Supports JSON Schema via `response_format` (OpenAI structured outputs) and `force_json` via `{"type": "json_object"}`
+- Private IP address detection for local servers: allows HTTP for LAN endpoints, requires HTTPS for public cloud providers
+- URL normalization strips common path suffixes (`/v1/chat/completions`, `/v1/completions`, etc.) so users can paste full endpoint URLs
+- Robust error handling with specific messages for auth failures (401), model-not-found (404), timeouts, and connection errors
+- Chat message construction heuristic: splits raw prompts into system + user messages for better instruction following
+
+**API key management:**
+
+- Cloud LLM API keys are stored in the OS keychain via `keyring` (Windows Credential Manager / macOS Keychain Access) — never in the repo or frontend bundle
+- Keys can be saved, tested, and cleared from the Admin UI
+- Falls back to `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL` environment variables when keychain values are not set
+- The Admin UI shows a masked key prefix with a green "Configured" badge when a key is stored
+
+**Admin UI — LLM Configuration section (`CloudLLMSection.tsx`):**
+
+- Three-card backend selector (Ollama / vLLM / Cloud LLM) with descriptions and taglines
+- Cloud LLM settings: base URL input, default model dropdown (fetches available models from the provider), API key save/clear with password-masked input
+- **Load models** button that queries the provider's `/v1/models` endpoint and populates a combined local + cloud model dropdown
+- Per-stage model overrides note directing users to the Model Orchestration section for separate Stage 1 and Stage 2 models
+- Advanced Mode shows environment variable fallback documentation
+- Status messages for save/clear operations and model loading errors
+
+**Per-stage model orchestration integration:**
+
+- The Model Orchestration section's Stage 1 and Stage 2 model selectors now include both local models (from Ollama/vLLM) and cloud models (from the OpenAI-compatible provider) in a single combined dropdown
+- Models are tagged with `(local)` or `(cloud)` prefixes for clarity
+- The `inference_backend` config field controls which provider handles all model requests
+
+**Sentiment engine provider dispatch:**
+
+- `SentimentEngine._call_ollama_sync` dispatches to `_call_openai_sync` or `_call_vllm_sync` based on the `inference_backend` setting
+- Cloud backends (OpenAI / vLLM) handle concurrency natively — the Ollama semaphore is bypassed for cloud calls
+- The OpenAI sync path always uses `force_json=True` and never sends `response_schema` (json_schema response_format), because many non-OpenAI providers (OpenRouter, Together, etc.) do not support strict JSON schema mode. The existing JSON repair pipeline handles any formatting deviations.
+
+**SSRF protection:**
+
+- `_validate_base_url` in `openai_client.py` blocks HTTP connections to public IP addresses — only HTTPS is allowed for cloud endpoints
+- HTTP is permitted for private/reserved IP ranges (127.0.0.0/8, 10.0.0.0/8, 192.168.0.0/16, etc.) so local vLLM/TGI servers work without TLS
+- DNS resolution is checked at runtime; unresolvable hosts are conservatively blocked
+
+**Files changed:** `backend/services/openai_client.py` (new), `backend/services/sentiment/engine.py`, `backend/services/secret_store.py`, `backend/services/app_config.py`, `backend/database/models.py`, `backend/database/migrate.py`, `backend/routers/config.py`, `backend/routers/analysis.py`, `frontend/src/components/admin/sections/CloudLLMSection.tsx` (new), `frontend/src/app/admin/page.tsx`, `frontend/src/lib/utils/config-normalizer.ts`, `frontend/src/lib/types/analysis.ts`, `README.md`, `RELEASENOTES.md`
+
+---
+
 ## Strategy Feature Toggles: Continuous Entry, Regime Adaptation, and Hold Decay
 
 Three new DB-backed toggles give admin users control over individual strategy features without editing `logic_config.json`. Each toggle is **global** (applies identically across Conservative / Standard / Crazy / Custom risk profiles) and null means "use the `logic_config.json` default."

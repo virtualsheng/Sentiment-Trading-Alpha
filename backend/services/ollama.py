@@ -29,12 +29,28 @@ def get_llm_backend_status(backend: str = "ollama", timeout: int = 3) -> Dict[st
     if backend == "vllm":
         from services.vllm import get_vllm_status
         return get_vllm_status(timeout=timeout)
+    if backend == "openai":
+        from services.openai_client import get_openai_status
+        from services.secret_store import get_openai_api_key
+        api_key = get_openai_api_key()
+        base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+        return get_openai_status(api_key=api_key, base_url=base_url, timeout=timeout)
     return get_ollama_status(timeout=timeout)
 
 
-def get_ollama_status(timeout: int = 3) -> Dict[str, Any]:
-    """Return reachability and active-model details from Ollama."""
-    ollama_root = get_ollama_root_url()
+def get_ollama_status(timeout: int = 3, ollama_url: str | None = None) -> Dict[str, Any]:
+    """Return reachability and active-model details from Ollama.
+    
+    Args:
+        timeout: HTTP request timeout in seconds.
+        ollama_url: Optional override for the Ollama URL. When provided, this
+            takes precedence over the OLLAMA_URL environment variable. Pass the
+            full /api/generate URL (e.g. "http://<remote-ip>:11434/api/generate").
+    """
+    if ollama_url:
+        ollama_root = ollama_url.strip().replace("/api/generate", "")
+    else:
+        ollama_root = get_ollama_root_url()
     configured_model = os.getenv("OLLAMA_MODEL", "").strip()
 
     tags_response = requests.get(f"{ollama_root}/api/tags", timeout=timeout)

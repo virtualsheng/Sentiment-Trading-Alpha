@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -422,30 +423,58 @@ def _dismiss_cookie_consent(page) -> None:
         pass
 
 
+_PLAYWRIGHT_FALLBACK_ENABLED = os.getenv("PLAYWRIGHT_FALLBACK_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
 async def fetch_article_text(url: str, fallback_text: str = "") -> str:
+    """Fetch and extract article text using trafilatura as the sole extractor.
+
+    trafilatura.fetch_url() handles download + extraction in one call with
+    proper encoding detection, connection pooling, and fallback strategies.
+    Playwright is opt-in only via PLAYWRIGHT_FALLBACK_ENABLED=1 for sites
+    that genuinely require JS rendering (most don't, and Playwright adds
+    30+ seconds of latency per article while often crashing on bot-protected
+    sites like Yahoo Finance).
+    """
     domain_cookies = _load_domain_cookies()
     req_cookies = _cookies_for_url(url, domain_cookies)
-    pw_cookies = _to_playwright_cookies(url, domain_cookies)
 
-    html = ""
-    try:
-        html = await asyncio.to_thread(_fetch_with_requests, url, 15, req_cookies or None)
-    except Exception:
-        html = ""
-
+    # ── Primary: trafilatura.fetch_url (download + extract in one call) ──
     extracted = ""
-    if html:
-        extracted = trafilatura.extract(
-            html,
+    try:
+        config = None
+        if req_cookies:
+            # Pass cookies as a Cookie header via trafilatura's config mechanism
+            cookie_header = "; ".join(f"{k}={v}" for k, v in req_cookies.items())
+            from trafilatura.settings import use_config, DEFAULT_CONFIG
+            config = use_config(DEFAULT_CONFIG)
+            if getattr(config, '_custom_headers', None) is None:
+                config._custom_headers = {}
+            config._custom_headers["Cookie"] = cookie_header
+        extracted = await asyncio.to_thread(
+            trafilatura.fetch_url,
+            url,
             favor_recall=True,
             include_comments=False,
             include_tables=False,
-            url=url,
-        ) or ""
+            config=config,
+        )
+        extracted = extracted or ""
+    except Exception:
+        extracted = ""
 
     if len(extracted.strip()) >= 400:
         return _clean_extracted_text(extracted, fallback_text)
 
+    # ── Playwright fallback (opt-in, off by default) ──────────────────────
+    if not _PLAYWRIGHT_FALLBACK_ENABLED:
+        logger.debug(
+            "Trafilatura extracted %d chars from %s — below 400-char threshold. "
+            "Playwright fallback is disabled (set PLAYWRIGHT_FALLBACK_ENABLED=1 to enable).",
+            len(extracted.strip()), url,
+        )
+        return _clean_extracted_text(extracted or fallback_text, fallback_text)
+
+    pw_cookies = _to_playwright_cookies(url, domain_cookies)
     try:
         rendered_html = await _fetch_with_playwright(url, inject_cookies=pw_cookies or None)
     except Exception:
@@ -462,7 +491,7 @@ async def fetch_article_text(url: str, fallback_text: str = "") -> str:
         if rendered_extracted.strip():
             return _clean_extracted_text(rendered_extracted, fallback_text)
 
-    return _clean_extracted_text(extracted, fallback_text)
+    return _clean_extracted_text(extracted or fallback_text, fallback_text)
 
 
 def _upsert_scraped_article(

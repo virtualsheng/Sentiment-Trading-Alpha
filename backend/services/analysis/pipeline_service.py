@@ -243,6 +243,13 @@ class PipelineService:
             getattr(config, "stage2_timeout_seconds", None) or self._L.get("stage2_timeout_seconds", 420)
         )
 
+        # Apply the admin-configured Ollama parallelism budget for local models.
+        # Cloud backends (OpenAI/vLLM) ignore the semaphore and run fully parallel.
+        from services.sentiment.engine import SentimentEngine
+        SentimentEngine.configure_parallelism(
+            int(getattr(config, "ollama_parallel_slots", None) or 1)
+        )
+
         try:
             sentiment_results, sentiment_trace = await asyncio.wait_for(
                 self._sentiment.analyze_sentiment(
@@ -255,6 +262,10 @@ class PipelineService:
                     reasoning_model=reasoning_model,
                     web_context_by_symbol=web_context_by_symbol,
                     symbol_proxy_terms_by_symbol=dict(getattr(config, "symbol_proxy_terms", {}) or {}),
+                    openai_base_url=getattr(config, "openai_base_url", None),
+                    openai_model=getattr(config, "openai_model", None),
+                    ollama_url=getattr(config, "ollama_url", None),
+                    vllm_url=getattr(config, "vllm_url", None),
                 ),
                 timeout=stage2_timeout_seconds,
             )
