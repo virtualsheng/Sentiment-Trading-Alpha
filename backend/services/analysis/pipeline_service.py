@@ -41,6 +41,9 @@ class PipelineService:
         db: Session,
         price_cache: PriceCacheService,
         logic_config: dict[str, Any],
+        continuous_entry_enabled: Optional[bool] = None,
+        regime_adaptation_enabled: Optional[bool] = None,
+        hold_decay_enabled: Optional[bool] = None,
     ) -> None:
         self._db = db
         self._price_cache = price_cache
@@ -49,7 +52,12 @@ class PipelineService:
         # Compose child services (dependency tree: unidirectional)
         self._sentiment = SentimentService(price_cache=price_cache, logic_config=logic_config)
         self._market = MarketDataService(price_cache=price_cache, logic_config=logic_config)
-        self._signal = SignalService(logic_config=logic_config)
+        self._signal = SignalService(
+            logic_config=logic_config,
+            continuous_entry_enabled=continuous_entry_enabled,
+            regime_adaptation_enabled=regime_adaptation_enabled,
+            hold_decay_enabled=hold_decay_enabled,
+        )
         self._materiality = MaterialityService(logic_config=logic_config)
         self._hysteresis = HysteresisService(logic_config=logic_config)
         self._persistence = PersistenceService(logic_config=logic_config)

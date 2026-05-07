@@ -47,6 +47,30 @@ export const ANALYSIS_STAGES = [
     { key: "signal", label: "Building trade signals", weight: 0.22, matches: ["Generating trading signal", "Signal: "] },
 ];
 
+export const SIGNAL_METRICS = [
+    {
+        key: "bluster",
+        label: "Bluster",
+        range: "−1.0 to +1.0",
+        desc: "Measures market hype, noise, and emotional sentiment in headlines. Negative values indicate bearish/ fearful sentiment; positive values indicate bullish/euphoric sentiment. Extreme values in either direction signal potential reversals.",
+        color: "text-amber-400",
+    },
+    {
+        key: "policy_change",
+        label: "Policy Change",
+        range: "0.0 to 1.0+",
+        desc: "Quantifies the magnitude of expected regulatory, monetary, or geopolitical shifts affecting the asset. Values above 0.7 signal material policy developments that could drive sustained price movement.",
+        color: "text-violet-400",
+    },
+    {
+        key: "confidence",
+        label: "Confidence",
+        range: "0.0 to 1.0",
+        desc: "How certain the model is in its sentiment assessment based on signal clarity, source agreement, and data recency. Higher values mean stronger conviction in the assigned bluster and policy scores.",
+        color: "text-cyan-400",
+    },
+];
+
 export const SIGNAL_RULES = [
     { border: "border-l-red-500", bg: "bg-red-500/5", label: "SHORT", labelColor: "text-red-400", desc: "Bluster < −0.5 & Policy < 0.3" },
     { border: "border-l-emerald-500", bg: "bg-emerald-500/5", label: "LONG", labelColor: "text-emerald-400", desc: "Policy Change > 0.7" },

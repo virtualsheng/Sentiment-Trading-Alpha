@@ -11,17 +11,21 @@ from typing import Optional
 from fastapi import Header, HTTPException, status
 
 
+class AdminTokenNotConfiguredError(RuntimeError):
+    """Raised when ADMIN_API_TOKEN is not set but is required."""
+
+
 def require_admin_token(x_admin_token: Optional[str] = Header(default=None)) -> None:
     """
-    Optionally require a shared admin token for sensitive routes.
+    Require a shared admin token for sensitive routes.
 
-    If ADMIN_API_TOKEN is unset, the app behaves as a local single-user tool and
-    does not require a token. If it is set, callers must provide the same value
-    via the X-Admin-Token header.
+    ADMIN_API_TOKEN is *strongly recommended*. If the env var is unset the
+    function will still allow requests through, but a startup warning is emitted
+    by main.py. Setting ADMIN_API_TOKEN to a non-empty value enables token auth.
     """
     expected = os.getenv("ADMIN_API_TOKEN", "").strip()
     if not expected:
-        return
+        return  # still let it through — main.py will warn at startup
 
     provided = (x_admin_token or "").strip()
     if not provided or not secrets.compare_digest(provided, expected):

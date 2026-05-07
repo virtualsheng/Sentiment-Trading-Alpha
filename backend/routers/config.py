@@ -5,6 +5,8 @@ Configuration API router.
 import asyncio
 from typing import Any, Dict, List, Optional
 
+from services.audit_log import record_audit_event
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -140,6 +142,13 @@ async def put_config(
     response = config_to_dict_with_stats(db, config)
     if notices:
         response["notices"] = notices
+    
+    record_audit_event(
+        action="config_update",
+        resource="config",
+        detail="Application configuration updated",
+        event_metadata={"changed_keys": list(payload.keys()), "notices": notices},
+    )
     return response
 
 
@@ -357,6 +366,13 @@ async def reset_data(
     db.commit()
 
     total = sum(counts.values())
+    
+    record_audit_event(
+        action="data_reset",
+        resource="database",
+        detail=f"Wiped {total} rows from analysis, trade, and post tables",
+        event_metadata={"deleted": counts, "total_rows_deleted": total},
+    )
     return {"ok": True, "deleted": counts, "total_rows_deleted": total}
 
 

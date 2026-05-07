@@ -89,6 +89,9 @@ def migrate():
             ("materiality_min_sentiment_delta", "REAL"),
             ("reentry_cooldown_minutes", "INTEGER"),
             ("min_same_day_exit_edge_pct", "REAL"),
+            ("continuous_entry_enabled", "BOOLEAN"),
+            ("regime_adaptation_enabled", "BOOLEAN"),
+            ("hold_decay_enabled", "BOOLEAN"),
         ]:
             if column_name not in existing_cols:
                 print(f"Adding {column_name} to app_config...")
@@ -157,7 +160,7 @@ def migrate():
         ]:
             if index_name not in existing_indexes:
                 print(f"Creating index {index_name}...")
-                conn.execute(text(f"CREATE INDEX {index_name} ON {table_name} ({column_name})"))
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_name})"))
                 conn.commit()
 
         # ── price_history table ───────────────────────────────────────────────
@@ -180,7 +183,7 @@ def migrate():
                     UNIQUE(symbol, date)
                 )
             """))
-            conn.execute(text("CREATE INDEX ix_price_history_symbol_date ON price_history (symbol, date)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_price_history_symbol_date ON price_history (symbol, date)"))
             conn.commit()
             print("price_history table created.")
 
@@ -201,9 +204,9 @@ def migrate():
                     fast_lane_triggered BOOLEAN NOT NULL DEFAULT 0
                 )
             """))
-            conn.execute(text("CREATE INDEX ix_scraped_articles_processed ON scraped_articles (processed)"))
-            conn.execute(text("CREATE INDEX ix_scraped_articles_published_at ON scraped_articles (published_at)"))
-            conn.execute(text("CREATE INDEX ix_scraped_articles_discovered_at ON scraped_articles (discovered_at)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_scraped_articles_processed ON scraped_articles (processed)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_scraped_articles_published_at ON scraped_articles (published_at)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_scraped_articles_discovered_at ON scraped_articles (discovered_at)"))
             conn.commit()
             print("scraped_articles table created.")
 
@@ -236,9 +239,9 @@ def migrate():
                     best_price_seen REAL
                 )
             """))
-            conn.execute(text("CREATE INDEX ix_paper_trades_underlying ON paper_trades (underlying)"))
-            conn.execute(text("CREATE INDEX ix_paper_trades_entered_at ON paper_trades (entered_at)"))
-            conn.execute(text("CREATE INDEX ix_paper_trades_exited_at ON paper_trades (exited_at)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_paper_trades_underlying ON paper_trades (underlying)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_paper_trades_entered_at ON paper_trades (entered_at)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_paper_trades_exited_at ON paper_trades (exited_at)"))
             conn.commit()
             print("paper_trades table created.")
         else:
@@ -269,7 +272,7 @@ def migrate():
                     notes TEXT
                 )
             """))
-            conn.execute(text("CREATE INDEX ix_trade_closes_trade_id ON trade_closes (trade_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_trade_closes_trade_id ON trade_closes (trade_id)"))
             conn.commit()
             print("trade_closes table created.")
 

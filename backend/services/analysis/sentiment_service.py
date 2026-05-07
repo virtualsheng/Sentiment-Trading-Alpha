@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -149,7 +149,7 @@ class SentimentService:
                     msg = f"No {symbol}-relevant articles in current batch — holding until news arrives."
                     return SentimentAnalysisResponse(
                         request_id="",
-                        timestamp=datetime.utcnow(),
+                        timestamp=datetime.now(timezone.utc),
                         is_bluster=False,
                         bluster_score=0.0,
                         bluster_indicators=[],
@@ -596,7 +596,7 @@ class SentimentService:
                 symbol=symbol,
                 specialist_focus=self._symbol_specialist_focus(symbol, prompt_overrides),
                 text=symbol_text,
-                date=datetime.utcnow().strftime("%Y-%m-%d"),
+                date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 active_symbol=str(symbol_context.get("active_symbol", symbol)),
                 active_symbol_price=float(symbol_context.get("active_symbol_price", 0.0) or 0.0),
                 uso_price=float(symbol_context.get("uso_price", 0.0) or 0.0),

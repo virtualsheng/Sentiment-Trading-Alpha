@@ -1,5 +1,13 @@
 {
-  "dependencies": {
-    "zod": "^4.3.6"
+  "scripts": {
+    "start:backend": "python run.py",
+    "start:backend:verbose": "python run.py --verbose",
+    "start:frontend": "cd frontend && npm run dev",
+    "start:frontend:verbose": "cd frontend && npm run dev:verbose",
+    "start": "concurrently --names backend,frontend --prefix-colors blue,green \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:verbose": "concurrently --names backend,frontend --prefix-colors blue,green \"npm run start:backend:verbose\" \"npm run start:frontend:verbose\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
   }
 }

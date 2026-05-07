@@ -1,3 +1,116 @@
+# Release Notes — May 7, 2026
+
+## Strategy Feature Toggles: Continuous Entry, Regime Adaptation, and Hold Decay
+
+Three new DB-backed toggles give admin users control over individual strategy features without editing `logic_config.json`. Each toggle is **global** (applies identically across Conservative / Standard / Crazy / Custom risk profiles) and null means "use the `logic_config.json` default."
+
+**Continuous Entry Sizing** — When enabled (default), entry/exit is computed via sigmoid on directional score: at midpoint=0.42 the position is half-sized, tapering off below skip_floor=0.10. Existing positions smoothly shrink rather than flipping between 100% and 0%. Disabling reverts to the legacy binary gate (100% or nothing).
+
+**Regime Adaptation** — When enabled (default), the entry threshold is dynamically adjusted based on market volatility. ATR% above the high-vol threshold multiplies entry_threshold by 1.25 (harder to enter), and below the low-vol threshold multiplies by 0.80 (easier to enter). Disabling uses a static threshold regardless of volatility.
+
+**Separate Hold Decay** — When enabled (default off in default config), positions already held use a slower decay half-life than new entries, preventing existing positions from decaying too quickly under stale news. Disabling uses the same decay half-life for both entry and hold.
+
+**Admin UI** — All three toggles appear in the Custom Risk Profile modal with a note: "These apply globally to all risk profiles. Off = use logic_config.json default."
+
+**Files changed:** `backend/database/models.py`, `backend/database/migrate.py`, `backend/services/app_config.py`, `backend/services/analysis/signal_service.py`, `backend/services/analysis/pipeline_service.py`, `backend/routers/analysis.py`, `frontend/src/lib/utils/config-normalizer.ts`, `frontend/src/components/admin/modals/CustomRiskModal.tsx`
+
+---
+
+## Security Audit — Rate Limiting, SSRF Protection, Audit Logging, and More
+
+A full security audit was run against the codebase, surfacing 14 issues across three severity levels. All high and medium concerns were addressed.
+
+**Why this matters:** This app can route real money to Alpaca. Without basic protections, a compromised dependency, a malicious RSS feed, or even a misbehaving browser extension on localhost could alter trading behavior or leak API keys. These changes lock down the attack surface while keeping the local-first workflow intact.
+
+**What changed:**
+
+- **Rate limiting added** — Every API endpoint is now capped at 60 requests per minute. Previously, an attacker (or a runaway script) could hammer the backend as fast as the network allowed. This prevents brute-force token guessing and accidental resource exhaustion. The limit is generous enough that normal dashboard polling is unaffected.
+
+- **Admin token warnings strengthened** — When `ADMIN_API_TOKEN` is not set, the backend now prints a bold startup warning: *"Sensitive routes (config, Alpaca, trades) are UNPROTECTED."* Previously the message was easy to miss. The token itself is still optional by design (this is a local-first tool), but the risk is now impossible to ignore.
+
+- **CORS hardened** — If `CORS_ORIGINS` is set to `*` (wildcard), the backend now automatically disables credential sharing. The old configuration would allow any website to make authenticated requests — a dangerous combination. Specific origins like `http://localhost:3000` still work with full credentials.
+
+- **SSRF protection for RSS feeds** — Custom RSS feed URLs are now checked against private IP ranges (127.0.0.0/8, 10.0.0.0/8, 192.168.0.0/16, 169.254.0.0/16, and IPv6 equivalents) before the backend fetches them. If a feed URL resolves to a private address, it is silently rejected. This prevents an attacker who can modify feed settings from using the backend to probe internal networks or scrape cloud metadata endpoints (the classic SSRF attack).
+
+- **Security headers on every response** — The backend now sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy`, and `Referrer-Policy` on all HTTP responses. These headers prevent clickjacking, MIME-type sniffing, and referrer leakage — standard web security that was previously missing.
+
+- **Request body size limit** — Payloads larger than 10 MB are now rejected with a 413 status. Prevents memory exhaustion from oversized uploads.
+
+- **Audit logging** — A new `audit_log` database table records every config change and data reset with a timestamp, action type, and before/after context. Previously there was no record of who changed what or when. Config updates and data resets are now traced. The audit log is append-only and survives data resets.
+
+- **SQLite file permissions** — On Unix systems, the database file is now locked to owner-only read/write on every connection. Prevents other local users from reading trade history or config.
+
+- **Telegram bot exponential backoff** — If the Telegram API becomes unreachable, the bot now waits 1 second, then 2, 4, 8, up to 60 seconds before retrying. Previously it retried every 5 seconds unconditionally, which could trigger rate limiting or an IP ban.
+
+- **Graceful shutdown timeout** — Background tasks (ingestion, polling, Telegram) now have a 5-second timeout during shutdown. Previously they could block indefinitely, preventing clean restarts.
+
+**Files changed:** `backend/main.py`, `backend/security.py`, `backend/services/app_config.py`, `backend/database/engine.py`, `backend/database/models.py`, `backend/services/audit_log.py` (new), `backend/routers/config.py`, `requirements.txt`
+
+**New dependency:** `slowapi>=0.1.9` — run `pip install -r requirements.txt` to pick it up.
+
+---
+
+## Live P&L Calculations, Manual Close Button, and Live Summary Endpoint
+
+Two follow-up releases corrected persistent P&L discrepancies in live Alpaca trading and added user-initiated position management.
+
+**Live P&L calculation fixes:**
+
+- Realized P&L on closed live trades is now computed from Alpaca's actual fill prices and quantities rather than deriving it from paper-trade entry prices — paper and live prices diverge when fills differ
+- Open position P&L uses Alpaca's current market value and cost basis directly from the brokerage API instead of estimating from entry price and last trade
+- Fixed a divide-by-zero edge case in the annualized return calculation when realized P&L is exactly -100% (total loss)
+- Live open positions now display actual Alpaca position data (`qty`, `market_value`, `cost_basis`, `unrealized_pl`) rather than deriving positions from the order history, which was inaccurate for multi-fill opens and partial closes
+
+**Manual close button:**
+
+- Each open live position in the trading page now has a **Close** button that sends an immediate market sell/cover order to Alpaca
+- The close records the action in the audit log with the reason "manual close"
+- After closing, the position card updates to show the closed state without requiring a page refresh
+
+**Live summary endpoint:**
+
+- New `/alpaca/live-summary` API endpoint returns aggregated live trading data: total realized P&L, total realized win rate, average win/loss, open P&L, deployed capital, and per-position details
+- Replaces ad-hoc client-side calculations with a single server-authoritative call
+- The trading page consumes this endpoint for the live summary cards and position table, keeping P&L numbers consistent with what Alpaca reports
+
+**Files changed:** `backend/services/alpaca_broker.py`, `backend/routers/alpaca.py`, `frontend/src/app/trading/page.tsx`, `backend/routers/analysis.py`, `backend/services/analysis/persistence_service.py`, `frontend/src/app/api/alpaca/live-summary/route.ts` (new)
+
+---
+
+# Release Notes — May 4, 2026
+
+## Full vLLM Backend Support and Admin UI Integration
+
+This release added first-class vLLM support alongside Ollama, enabling users to run the analysis pipeline against any OpenAI-compatible model server.
+
+**vLLM service layer:**
+
+- New `backend/services/vllm.py` provides model discovery via `/health` and `/v1/models` endpoints, plus status reporting with reachability, active model name, and available model list
+- The service returns a status payload that mirrors the existing Ollama status shape — the frontend health/status components work unchanged with either backend
+- Configured via `VLLM_URL` environment variable (defaults to `http://localhost:8000`)
+
+**Sentiment engine provider abstraction:**
+
+- The sentiment engine (`backend/services/sentiment/engine.py`) was refactored to dispatch model requests to either Ollama or vLLM based on the resolved endpoint URL
+- Request construction, header handling, and response parsing share a common code path regardless of provider
+- The existing `OLLAMA_MODEL` environment variable is used as the backend-agnostic configured model name
+
+**Admin UI vLLM status:**
+
+- The Admin models section now shows vLLM status alongside Ollama: reachability indicator, active model, and available model list
+- When both providers are reachable the user sees both, making provider choice transparent from the dashboard
+- Status polling updates live without requiring a page refresh
+
+**Trading page improvements:**
+
+- Improved error handling when live trade data is unavailable or stale — the page degrades gracefully instead of showing broken cards
+- Added more detailed logging throughout the trading page data pipeline for easier debugging
+- Refactored trading page component code for better maintainability
+
+**Files changed:** `backend/services/vllm.py` (new), `backend/services/sentiment/engine.py`, `backend/services/ollama.py`, `backend/services/app_config.py`, `backend/services/paper_trading.py`, `backend/database/migrate.py`, `backend/database/models.py`, `backend/routers/analysis.py`, `backend/services/analysis/persistence_service.py`, `backend/main.py`, `frontend/src/app/admin/page.tsx`, `frontend/src/app/trading/page.tsx`
+
+---
+
 # Release Notes — May 3, 2026
 
 ## Telegram Hardening, Split Admin Controls, and Telegram-Only Snapshots
@@ -74,8 +187,6 @@ The admin page was rewritten from a single long scroll into a section-based layo
 
 ### Fixed vs. vol-normalized order sizing
 
-### Fixed vs. vol-normalized order sizing
-
 A new **Order sizing mode** toggle in Admin › Execution & Brokerage lets you choose how trade sizes are calculated:
 
 - **Scale by vol & conviction** (default) — each trade is sized by the vol-normalization formula: `(1% × base) / ATR_14d_pct`, then scaled ×0.25–×5 by conviction. Applies to both paper simulation trades and live Alpaca orders.
@@ -98,6 +209,74 @@ A new `backend/domain_cookies.json` file (never committed — added to `.gitigno
 - Full setup instructions added to README under **Domain Cookies (Paywalled Sites)**
 
 **Files changed:** `backend/services/data_ingestion/worker.py`, `.gitignore`, `README.md`
+
+---
+
+## Live Alpaca Position Reconciliation and Orphaned Order Handling
+
+Tighter integration between Alpaca's live positions and the application's internal trade tracking.
+
+**Pre-existing position baseline:**
+
+- When the app opens a live Alpaca position for a symbol the user already held manually, it records the pre-existing size at entry
+- Close operations only unwind the app-managed portion above that manual baseline, leaving the original holdings untouched
+- Prevents the app from accidentally closing positions the user entered themselves outside the trading bot
+
+**Tracked-symbol-only opens:**
+
+- New Alpaca opens are blocked for symbols not in the user's configured `tracked_symbols` or `custom_symbols` list
+- Prevents the app from entering positions in symbols it has no analytical coverage for, even if the trade logic would otherwise create a recommendation
+
+**Orphaned order reconciliation:**
+
+- New reconciliation logic (`poll_unfilled_orders`) detects Alpaca orders in the database with `pending` or `open` status that may have been filled while the app was offline
+- Polls Alpaca's order history for each unfilled database record and updates the local status when a match is found
+- Provides an API endpoint (`/alpaca/unfilled-orders`) to list orphaned orders and an acknowledge endpoint to manually resolve orders that cannot be matched
+- The reconciliation runs automatically during status polling so the order log stays accurate across restarts
+
+**Files changed:** `backend/services/alpaca_broker.py`, `backend/routers/alpaca.py`
+
+**DB cleanup:**
+
+- Removed the PostgreSQL migration tool (`alembic`) that was included during early development — migrations are handled entirely by `backend/database/migrate.py` (SQLite-only project)
+
+**Files changed:** project root (removed alembic configuration and migration files)
+
+---
+
+## Telegram Bot — getUpdates Long-Polling and /snapshot Command
+
+### Telegram rewrite with getUpdates polling
+
+The Telegram bot was rewritten from webhook-based delivery to long-polling via Telegram's `getUpdates` API. This eliminates the need for a public HTTPS URL or webhook registration — the bot works behind NAT, VPNs, or local-only setups.
+
+- Each poll cycle is a single `asyncio.to_thread` call with a 30-second max blocking timeout
+- Cancels cleanly on backend shutdown — no dangling connections
+- Every incoming message is checked against the stored `chat_id` from the keychain; messages from any other sender are silently dropped
+- Commands supported: `/stop`, `/start`, `/status`, `/help`, `/snapshot`
+- `/stop` saves the current Alpaca execution mode to `alpaca_pre_stop_mode` before setting it to `"off"`
+- `/start` restores exactly what was running before the most recent `/stop`
+- No other config fields can be mutated via Telegram — only the execution mode toggle
+
+### /snapshot command
+
+A new `/snapshot` command queues delivery of the most recent completed analysis run as a Telegram photo, bypassing the normal interval/change-detection gates. Users are informed they must restart the backend after enabling Telegram control for the `/snapshot` command to work.
+
+### Remote stop/start banner
+
+A persistent banner appears at the top of the trading page when the bot was remotely stopped or started via Telegram — it must be manually acknowledged to dismiss. This prevents confusion when the execution mode changes outside the Admin UI.
+
+### Snapshot delivery fixes
+
+Fixed snapshot rendering when `remote_snapshot_enabled` is off but a manual `/snapshot` command is issued — the snapshot now renders correctly regardless of the auto-snapshot toggle.
+
+### Documentation split
+
+- `README.md` was slimmed down to a quick-start orientation
+- Detailed setup, configuration, and operational reference moved to a new `REFERENCE.md`
+- Release notes updated to reflect the new Telegram polling architecture
+
+**Files changed:** `backend/services/telegram_bot.py`, `backend/routers/config.py`, `backend/main.py`, `backend/services/remote_snapshot.py`, `frontend/src/app/trading/page.tsx`, `frontend/src/components/admin/modals/RemoteSnapshotSetupModal.tsx`, `README.md`, `REFERENCE.md` (new), `RELEASENOTES.md`
 
 ---
 
@@ -294,7 +473,7 @@ This update also folded in the Mac-side PR fixes and merged them with the local 
 - **Explicit dev scripts** — `frontend/package.json` now exposes both `dev:turbo` and `dev:webpack` so Webpack remains an easy fallback when Turbopack exposes local environment issues
 - **Legacy config import made defensive** — `backend/services/app_config.py` now tolerates missing legacy columns during import and clamps/coerces persisted values before normalizing them into the live config row
 - **Boolean parsing fixed** — persisted string booleans like `"false"` and `"0"` are now parsed correctly instead of becoming truthy through Python's default `bool("false")` behavior
-- **Static Stage 1 trace clarified** — built-in symbols such as `SPY`, `QQQ`, `BITO`, and `USO` now show an explicit “static proxy map” explanation in the secret/debug view instead of the misleading “No Stage 1 prompt recorded” message
+- **Static Stage 1 trace clarified** — built-in symbols such as `SPY`, `QQQ`, `BITO`, and `USO` now show an explicit "static proxy map" explanation in the secret/debug view instead of the misleading "No Stage 1 prompt recorded" message
 
 ## Specialist Prompt Architecture Rewrite
 
@@ -443,188 +622,6 @@ Extended hours are used because that is when pre-market and after-hours paper or
 **New `paper_trades` database table** — completely independent of all analysis tables; never touched by reset-data operations. Stores one row per opened position with entry/exit prices, timestamps, session, shares, and P&L.
 
 **DB upgrade note:** Restart the backend — `migrate.py` creates the `paper_trades` table automatically.
-
----
-
-## Summary
-
-This release added technical indicator context for the LLM, a persistent price history database, and a complete redesign of the Stage 1 article filter — replacing per-article LLM classification with fast keyword matching that now works correctly for custom symbols like NVDA and NOW. It also adds a red-team consensus layer that can challenge and adjust the primary trade signal, a saved-run comparison workflow that explains why a ticker changed between two historical runs, and a more realistic ETA/progress bar based on observed runtime history. The release also focused on making the app easier to operate day to day: persistent admin settings, clearer model comparison, better history visibility, more flexible symbol/feed configuration, and runtime/status fixes.
-
-## Technical Indicators and Price History
-
-Seven quantitative indicators are now computed from locally stored OHLCV data and injected directly into each symbol's specialist prompt so the LLM reasons about trend context, not just news sentiment.
-
-**Indicators:**
-- RSI(14) — momentum
-- SMA50 / SMA200 — trend with Golden Cross / Death Cross detection
-- MACD(12,26,9) — trend direction and histogram
-- Volume Profile — above / at / below 20-day average volume
-- Bollinger Bands %B — price position within bands
-- ATR(14) — volatility
-- OBV trend — accumulation / distribution over the last 5 sessions
-
-**Price history storage:**
-- OHLCV data is stored in a dedicated `price_history` table that is completely independent of the analysis database — reset-data operations never touch it
-- Delta pull: only rows newer than the latest stored date are fetched, so re-running the pull is safe
-- 3-second delay between symbols to stay within yfinance rate limits; if a rate-limit exception is hit the pull stops and saves what it has so the next pull can resume
-- The Admin page has a new Price History section: per-symbol row count, date range, a green (ready) / amber (needs pull) indicator, and a pull button
-- Technical indicators are only injected when price history has been pulled — if the table is empty the analysis prompt is unchanged and analysis runs normally
-
-**Implementation note:** All 7 indicators are computed in Python using numpy only — no new dependencies.
-
-## Stage 1 Article Filter — Keyword Generation Redesign
-
-The previous Stage 1 approach (LLM classifying every article) had several failure modes: small models ignored JSON instructions, token limits caused truncated responses returning 0 relevant articles, and custom symbols like NVDA and NOW were invisible to the keyword filter because they had no entries in the built-in map.
-
-The new approach is faster and works for any symbol:
-
-- **Built-in symbols** (USO, BITO, QQQ, SPY): the static `TICKER_PROXY_MAP` is used directly — no LLM call, instant
-- **Custom symbols** (e.g. NVDA, NOW, TSLA): the LLM is called **once** with a short focused prompt asking for 15-20 proxy keywords for that ticker; the response is cached for the server session so the LLM is only called once per symbol per restart
-- **Article matching**: pure substring keyword matching — milliseconds regardless of article count, no per-article LLM calls at all
-- If keyword generation fails, the ticker name itself is used as the fallback keyword
-- If nothing matches, all articles are passed to Stage 2 (same safe fallback as before)
-
-Even llama3.2 (3B) handles keyword generation reliably since "what words appear in NVDA news?" is a factual question, not a multi-article classification task.
-
-## Stage 1 Smoke Test — Custom Symbol Coverage
-
-`test_stage1.py` now tests both built-in and custom symbol paths:
-
-```text
-python test_stage1.py llama3.2:latest
-```
-
-Output now shows:
-- Which keyword source was used per symbol: `(static)` or `(LLM-generated)`
-- The generated keywords for NVDA and NOW
-- Separate PASS/FAIL for built-in symbol catch rate vs custom symbol coverage vs noise filtering
-
-## Risk Profile and Leverage Control
-
-A new Risk Profile selector in Admin controls the maximum leverage the simulation will take. Four profiles:
-
-- **Conservative** — inverse ETF at 1x for bearish signals, 1x for bullish (no leveraged long)
-- **Moderate** — 2x when confidence > 75%, otherwise 1x
-- **Aggressive** — 3x when confidence > 75%, otherwise 1x
-- **Crazy** — always 3x
-
-The conservative profile routes bearish signals to true inverse ETFs (SQQQ, SPXS, SCO, SBIT) with BUY action instead of synthetic SELL positions. Stored in the database alongside other admin config.
-
-## Broker-Ready Execution Tickers
-
-Recommendations now name the actual tradable instrument rather than an abstract lever on the underlying. The execution mapping:
-
-| Signal | Action |
-|---|---|
-| QQQ bullish 3x | BUY TQQQ |
-| QQQ bearish | BUY SQQQ |
-| SPY bullish 3x | BUY SPXL |
-| SPY bearish | BUY SPXS |
-| USO bullish 2x | BUY UCO |
-| USO bearish 2x | BUY SCO |
-| BITO bullish 2x | BUY BITU |
-| BITO bearish 2x | BUY SBIT |
-
-Bitcoin and oil are capped at 2x. The Market Prices panel shows execution tickers alongside their underlyings when a position is active.
-
-## Health Page
-
-A dedicated `/health` page was added showing: active Ollama model and reachability, average analysis runtime, latest data-pull status (success or error), uptime, and recent system events. Available without running a fresh analysis.
-
-## Multi-Model Orchestration and Depth Mode
-
-The analysis pipeline now supports independently configuring Stage 1 (extraction) and Stage 2 (reasoning) models. Three depth modes control pipeline behavior:
-
-- **Light** — single model for both stages; lowest article count per feed
-- **Normal** — two-stage when both models are set, otherwise single-stage
-- **Detailed** — always two-stage; required models highlighted in Admin with an amber badge until set
-
-Model selectors in Admin adapt their layout to the selected depth. Snapshots store the model configuration used so reruns reproduce the original pipeline exactly. The runtime config card shows a `Stage 1 → Stage 2` label when multi-model is active.
-
-## Highlights
-
-- The primary displayed recommendation is now a consensus signal after a blue-team proposal is challenged by a structured red-team review
-- Red-team review can adjust the final action, confidence, urgency, and ATR-based stop-loss guidance when the original thesis looks fragile
-- Compare can now load any two saved runs directly and explain why a symbol changed between them
-- The in-progress ETA bar now starts at `0%` and uses recent run durations to pace both percent complete and ETA more honestly
-- Admin settings now persist in the database instead of disappearing after rebuilds or restarts
-- Custom symbols and custom RSS feeds are saved and restored correctly
-- Default symbols and RSS feeds can be individually enabled or disabled
-- Users can add up to `3` custom symbols and up to `3` custom RSS feeds
-- RSS article depth can be controlled with `Light`, `Normal`, and `Detailed` presets
-- Added optional `Light Web Research` prompt grounding in Admin
-- Web research runs across the full active tracked symbol set, including built-ins like `USO`, `BITO`, `QQQ`, and `SPY`
-- Web research depth now follows the selected analysis depth:
-  - `Light`: `3` items per symbol
-  - `Normal`: `4` items per symbol
-  - `Detailed`: `6` items per symbol
-- Live feed now shows symbol-scoped web research pulls as expandable cards, similar to RSS article events
-- Market Prices now includes execution tickers for active underlyings, including symbols like `SQQQ`, `SPXS`, `SBIT`, and `SCO`
-- Recommendation History now shows per-ticker recommendation details more reliably
-- Snapshot comparison now shows:
-  - explicit baseline vs comparison model labeling
-  - missing-on-one-side recommendations as `Different`
-  - side-by-side reasoning summaries for why each model made its choice
-- Ollama runtime status now prefers the actually running model from `/api/ps`
-- Snapshot timestamps now render correctly in the configured local timezone
-- All timestamps across the app respect the configured display timezone (stored in the database and synced to the browser)
-- History and Compare tabs are always visible — no longer require a completed current run to display
-
-## Persistence Improvements
-
-The following admin-controlled items are now intended to persist through the database-backed app config:
-
-- tracked/default symbol selection
-- custom symbols
-- enabled RSS feed selection
-- custom RSS feeds
-- RSS article depth settings
-- prompt overrides
-- snapshot retention
-- display timezone
-- light web research enablement
-
-The backend database path was also stabilized so saved config is no longer lost depending on which directory the backend was started from.
-
-## Comparison Lab Improvements
-
-Replay-based model comparison is now more usable for actual evaluation work.
-
-- The comparison UI makes it clearer which model is the baseline and which is the comparison run
-- Symbol-level rows treat `trade vs no trade` as a real difference
-- Each symbol can show a short baseline-vs-comparison reasoning summary to explain disagreements
-- Comparison headers were cleaned up so model names sit above the table instead of inside the column headers
-- Saved-run compare can now load two historical analyses directly and explain per-symbol changes in recommendation, score movement, confidence, and leverage
-
-## History and Snapshot Improvements
-
-- Saved analysis snapshots now persist recommendation details in the saved signal payload
-- Older runs can fall back to persisted `Trade` rows when reconstructing history
-- Empty history states use clearer wording when ticker-level recommendations were not saved
-- Saved snapshot detail loading now supports reopening a full historical run for side-by-side comparison and change-driver analysis
-
-## Signal Review Improvements
-
-- After the initial signal is generated, a dedicated red-team review checks for regime shifts in recent news, sentiment-vs-technical divergence, source-bias concentration, and portfolio de-coupling risk
-- The user-facing primary signal is now the final consensus output instead of the initial unchallenged model answer
-- ATR-aware stop guidance from the review layer is carried alongside the adjusted signal where available
-
-## Runtime UX Improvements
-
-- The analysis progress bar now starts at `0%` when a run begins
-- Once at least a couple of previous runs exist, ETA pacing uses recent observed runtimes instead of fixed stage percentages
-- Progress reaches `100%` when the run finishes instead of lingering at an artificial near-complete value
-
-## Operational Notes
-
-- Custom symbols currently price and analyze correctly, but only built-in symbols have the richer symbol-specific FRED/EIA validation bundles
-- The model comparison dropdown sends the selected model name directly to Ollama; the model does not need to be manually preloaded first, but it must be installed locally
-- Light Web Research uses a narrow trusted-source news pull rather than general model browsing, and the saved web context is reused during snapshot reruns so comparisons stay fair
-
-## Verification
-
-- Frontend production build: `npm run build`
-- Backend modified files compiled successfully
 
 ---
 

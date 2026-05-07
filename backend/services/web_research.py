@@ -303,7 +303,7 @@ def fetch_recent_symbol_web_context(
     bounded_max_age_days = max(1, min(60, int(max_age_days)))
     cache_key = f"{normalized_symbol}:{normalized_alias.lower()}:{bounded_max_items}:{bounded_max_age_days}"
     cached = _cache.get(cache_key)
-    if cached and (datetime.utcnow() - cached[0]) < timedelta(minutes=WEB_RESEARCH_TTL_MINUTES):
+    if cached and (datetime.now(timezone.utc) - cached[0]) < timedelta(minutes=WEB_RESEARCH_TTL_MINUTES):
         return cached[1]
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=bounded_max_age_days)
@@ -364,5 +364,5 @@ def fetch_recent_symbol_web_context(
         "summary": "\n".join(summary_lines),
         "items": deduped,
     }
-    _cache[cache_key] = (datetime.utcnow(), payload)
+    _cache[cache_key] = (datetime.now(timezone.utc), payload)
     return payload

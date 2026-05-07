@@ -109,6 +109,9 @@ export default function SecretPage() {
                         <p className="mt-2 text-sm text-slate-400">
                             Request `{data.request_id}` · {data.model_name || "Unknown model"} · {(data.processing_time_ms / 1000).toFixed(2)}s
                         </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                            Run occurred: {data.timestamp ? new Date(data.timestamp).toLocaleString("en-US", { timeZoneName: "short" }) : "Unknown"}
+                        </p>
                     </div>
                     <Link href="/" className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800">
                         Back Home

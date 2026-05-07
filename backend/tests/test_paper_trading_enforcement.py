@@ -64,7 +64,7 @@ class TestPaperTradingEnforcement(unittest.TestCase):
         trade.realized_pnl_pct = None
         trade.close_reason = close_reason
         trade.holding_window_until = holding_window_until
-        trade.entered_at = entered_at or datetime.utcnow()
+        trade.entered_at = entered_at or datetime.now(timezone.utc)
         trade.exited_at = exited_at
         trade.analysis_request_id = "test-request-001"
         trade.market_session = "open"

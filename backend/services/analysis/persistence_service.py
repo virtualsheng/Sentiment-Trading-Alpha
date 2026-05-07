@@ -312,41 +312,64 @@ class PersistenceService:
                             recs_by_underlying[sym] = r
                 recs_for_paper = []
                 _L = self._L
-                for sym, sym_result in (sentiment_results or {}).items():
-                    sym_upper = sym.upper()
-                    rec = recs_by_underlying.get(sym_upper, {})
-                    signal_type = str(sym_result.get("signal_type") or "HOLD").upper()
-                    _conf = float(sym_result.get("confidence") or 0.0)
-                    _dir = abs(float(sym_result.get("directional_score") or 0.0))
-                    _urg = str(sym_result.get("urgency") or "LOW").upper()
-                    _cv = _L["conviction"]
-                    if signal_type == "HOLD":
-                        _conviction = "LOW"
-                    elif _dir > _cv["high_score_threshold"] and _conf > _cv["high_confidence_threshold"]:
-                        _conviction = "HIGH"
-                    elif _urg == "HIGH" and _conf < _cv["high_score_threshold"]:
-                        _conviction = "LOW"
+                _final_signal = response.trading_signal
+                _final_conviction = str(getattr(_final_signal, "conviction_level", None) or "MEDIUM").upper()
+                _cv = _L["conviction"]
+
+                # Build paper trading entries from final recommendations
+                covered_syms: set = set()
+                for rec in recs_by_underlying.values():
+                    underlying = str(rec.get("underlying_symbol") or "").upper()
+                    if not underlying:
+                        continue
+                    covered_syms.add(underlying)
+                    action = str(rec.get("action") or "").upper()
+                    thesis = str(rec.get("thesis") or "").upper()
+                    # Map final recommendation to signal_type using thesis field
+                    if thesis == "LONG":
+                        signal_type = "LONG"
+                    elif thesis == "SHORT":
+                        signal_type = "SHORT"
                     else:
-                        _conviction = "MEDIUM"
+                        signal_type = "HOLD"
+                    _conviction = _final_conviction if signal_type != "HOLD" else "LOW"
                     _trade_type = {"HIGH": "POSITION", "MEDIUM": "SWING", "LOW": "VOLATILE_EVENT"}.get(_conviction, "SWING")
                     _hold_mins = _cv["holding_minutes"].get(_trade_type, 720)
                     _atr_pct = 0.0
                     if price_context:
-                        _indicators = (price_context.get(f"technical_indicators_{sym.lower()}") or {})
+                        _indicators = (price_context.get(f"technical_indicators_{underlying.lower()}") or {})
                         try:
                             _atr_pct = float(_indicators.get("atr_14_pct") or 0.0)
                         except (TypeError, ValueError):
                             _atr_pct = 0.0
                     recs_for_paper.append({
-                        "underlying": sym_upper,
-                        "execution_ticker": rec.get("symbol", sym_upper) if rec else sym_upper,
+                        "underlying": underlying,
+                        "execution_ticker": str(rec.get("symbol", underlying) or underlying).upper(),
                         "signal_type": signal_type,
-                        "leverage": rec.get("leverage", "1x") if rec else "1x",
+                        "leverage": str(rec.get("leverage", "1x") or "1x"),
                         "conviction_level": _conviction,
                         "trading_type": _trade_type,
                         "holding_minutes": _hold_mins,
                         "atr_pct": _atr_pct,
+                        "size_pct": str(rec.get("size_pct", "100.0") or "100.0"),
                     })
+
+                # Add HOLD entries for any analyzed symbols that didn't get a final
+                # recommendation — this ensures existing open positions for those
+                # symbols get closed via process_signals orphan cleanup.
+                for sym in (sentiment_results or {}):
+                    sym_upper = sym.upper()
+                    if sym_upper not in covered_syms:
+                        recs_for_paper.append({
+                            "underlying": sym_upper,
+                            "execution_ticker": sym_upper,
+                            "signal_type": "HOLD",
+                            "leverage": "1x",
+                            "conviction_level": "LOW",
+                            "trading_type": "VOLATILE_EVENT",
+                            "holding_minutes": _cv["holding_minutes"].get("VOLATILE_EVENT", 60),
+                            "atr_pct": 0.0,
+                        })
                 if recs_for_paper:
                     _paper_actions = paper_process_signals(
                         db=db,

@@ -395,7 +395,7 @@ def _check_circuit_breakers(db, config, pending_notional: float = 0.0) -> None:
                     _disable_live_trading(db, config, f"daily loss limit ${daily_limit:.0f} hit (P&L ${today_pnl:.2f})")
                     raise CircuitBreakerError(f"Daily loss limit ${daily_limit:.0f} hit")
         else:
-            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             today_pnl = sum(
                 float(t.realized_pnl or 0)
                 for t in db.query(PaperTrade)

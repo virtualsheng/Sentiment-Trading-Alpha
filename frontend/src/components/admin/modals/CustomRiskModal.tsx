@@ -36,6 +36,37 @@ export function CustomRiskModal({ show, config, setConfig, onClose }: CustomRisk
                     <label className="block"><span className="text-xs text-slate-400">Materiality Gate — Min Sentiment Delta</span><input type="number" min={0.01} max={1.0} step={0.01} value={config.materiality_min_sentiment_delta ?? ""} placeholder={String(ld.materiality_min_sentiment_delta)} onChange={(e) => setConfig((c) => ({ ...c, materiality_min_sentiment_delta: e.target.value === "" ? null : Number(e.target.value) }))} className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white" /></label>
                 </div>
 
+                {/* ── Strategy Feature Toggles (global, not per-risk-profile) ── */}
+                <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 space-y-3">
+                    <div className="space-y-1 mb-1">
+                        <p className="text-sm font-semibold text-slate-200">Strategy Feature Toggles</p>
+                        <p className="text-xs text-slate-500">These apply globally to all risk profiles. Off = use logic_config.json default.</p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <label className="flex items-center gap-3 p-3 rounded-lg border border-slate-700 bg-slate-800 cursor-pointer hover:bg-slate-750">
+                            <input type="checkbox"
+                                checked={config.continuous_entry_enabled ?? false}
+                                onChange={(e) => setConfig((c) => ({ ...c, continuous_entry_enabled: e.target.checked ? true : null }))}
+                                className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500" />
+                            <span className="text-sm text-slate-200">Continuous Entry Sizing</span>
+                        </label>
+                        <label className="flex items-center gap-3 p-3 rounded-lg border border-slate-700 bg-slate-800 cursor-pointer hover:bg-slate-750">
+                            <input type="checkbox"
+                                checked={config.regime_adaptation_enabled ?? false}
+                                onChange={(e) => setConfig((c) => ({ ...c, regime_adaptation_enabled: e.target.checked ? true : null }))}
+                                className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500" />
+                            <span className="text-sm text-slate-200">Regime Adaptation</span>
+                        </label>
+                        <label className="flex items-center gap-3 p-3 rounded-lg border border-slate-700 bg-slate-800 cursor-pointer hover:bg-slate-750">
+                            <input type="checkbox"
+                                checked={config.hold_decay_enabled ?? false}
+                                onChange={(e) => setConfig((c) => ({ ...c, hold_decay_enabled: e.target.checked ? true : null }))}
+                                className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500" />
+                            <span className="text-sm text-slate-200">Separate Hold Decay</span>
+                        </label>
+                    </div>
+                </div>
+
                 <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 space-y-3">
                     <p className="text-sm font-semibold text-slate-200">Crazy Ramp Fallback (ATR / volume / retrace)</p>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

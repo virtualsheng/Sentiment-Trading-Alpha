@@ -5,7 +5,7 @@ Fetches historical and real-time market data for ETFs/stocks
 
 import time
 import yfinance as yf
-from datetime import datetime, timedelta, date as date_cls
+from datetime import datetime, timezone, timedelta, date as date_cls
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
@@ -152,14 +152,14 @@ class PriceClient:
 
             if extended_quote.get("price") is not None:
                 current_price = extended_quote["price"]
-                quote_ts = extended_quote.get("timestamp") or datetime.utcnow()
+                quote_ts = extended_quote.get("timestamp") or datetime.now(timezone.utc)
                 session = str(extended_quote.get("session") or "closed")
                 source = str(extended_quote.get("source") or "yfinance_history_prepost_1m")
             else:
                 current_price = last_price
                 if current_price is None or (isinstance(current_price, float) and (current_price != current_price)):
                     current_price = prev_close
-                quote_ts = datetime.utcnow()
+                quote_ts = datetime.now(timezone.utc)
                 if quote_ts.tzinfo is None:
                     quote_ts = quote_ts.replace(tzinfo=ZoneInfo("UTC"))
                 session = self._classify_market_session(quote_ts)
@@ -420,7 +420,7 @@ class PriceClient:
 
                 if latest_row:
                     last_date = datetime.strptime(latest_row.date, "%Y-%m-%d").date()
-                    today = datetime.utcnow().date()
+                    today = datetime.now(timezone.utc).date()
                     if (today - last_date).days <= 1:
                         results[symbol] = {"status": "fresh", "rows": 0, "latest": latest_row.date}
                         continue

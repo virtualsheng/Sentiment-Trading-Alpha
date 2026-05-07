@@ -87,7 +87,7 @@ def test_open_skips_when_symbol_is_not_user_configured(db_session, monkeypatch):
         amount=500.0,
         shares=2.0,
         entry_price=250.0,
-        entered_at=datetime.utcnow(),
+        entered_at=datetime.now(timezone.utc),
         analysis_request_id="req-symbol-scope",
     )
     db_session.add(paper_trade)
@@ -116,7 +116,7 @@ def test_close_sells_only_app_managed_qty_above_manual_baseline(db_session, monk
         amount=1000.0,
         shares=5.0,
         entry_price=200.0,
-        entered_at=datetime.utcnow() - timedelta(days=1),
+        entered_at=datetime.now(timezone.utc) - timedelta(days=1),
         analysis_request_id="req-close-owned-only",
     )
     db_session.add(paper_trade)
@@ -164,7 +164,7 @@ def test_close_skips_when_only_manual_baseline_remains(db_session, monkeypatch):
         amount=1000.0,
         shares=5.0,
         entry_price=200.0,
-        entered_at=datetime.utcnow() - timedelta(days=1),
+        entered_at=datetime.now(timezone.utc) - timedelta(days=1),
         analysis_request_id="req-close-baseline-only",
     )
     db_session.add(paper_trade)
@@ -211,7 +211,7 @@ def test_extended_hours_orders_use_limit_and_qty(db_session, monkeypatch, event,
         amount=1000.0,
         shares=2.0,
         entry_price=500.0,
-        entered_at=datetime.utcnow(),
+        entered_at=datetime.now(timezone.utc),
         analysis_request_id="req-1",
     )
     db_session.add(paper_trade)
@@ -265,7 +265,7 @@ def test_regular_hours_respects_configured_order_type(db_session, monkeypatch):
         amount=500.0,
         shares=1.5,
         entry_price=333.33,
-        entered_at=datetime.utcnow(),
+        entered_at=datetime.now(timezone.utc),
         analysis_request_id="req-2",
     )
     db_session.add(paper_trade)
@@ -298,7 +298,7 @@ def test_open_skips_when_existing_live_position_already_at_cap(db_session, monke
         amount=100.0,
         shares=0.666667,
         entry_price=150.0,
-        entered_at=datetime.utcnow(),
+        entered_at=datetime.now(timezone.utc),
         analysis_request_id="req-3",
     )
     db_session.add(paper_trade)
@@ -329,7 +329,7 @@ def test_extended_hours_open_uses_remaining_capacity_qty(db_session, monkeypatch
         amount=100.0,
         shares=0.666667,
         entry_price=150.0,
-        entered_at=datetime.utcnow(),
+        entered_at=datetime.now(timezone.utc),
         analysis_request_id="req-4",
     )
     db_session.add(paper_trade)
@@ -360,7 +360,7 @@ def test_open_skips_when_pdt_limit_reached_for_sub_25k_live_account(db_session, 
         amount=100.0,
         shares=0.666667,
         entry_price=150.0,
-        entered_at=datetime.utcnow(),
+        entered_at=datetime.now(timezone.utc),
         analysis_request_id="req-5",
     )
     db_session.add(paper_trade)

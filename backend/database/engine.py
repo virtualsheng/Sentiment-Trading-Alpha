@@ -60,4 +60,16 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.execute("PRAGMA cache_size=10000")
     cursor.execute("PRAGMA busy_timeout=30000")
+    # Restrict file permissions on the database file (Unix: owner-only read/write)
+    try:
+        if os.name != "nt":  # skip on Windows (no chmod)
+            db_path = ROOT_DB_PATH
+            if db_path.exists():
+                import stat
+                current = db_path.stat().st_mode
+                owner_only = stat.S_IRUSR | stat.S_IWUSR
+                if current & (stat.S_IRGRP | stat.S_IROTH | stat.S_IWGRP | stat.S_IWOTH):
+                    db_path.chmod(owner_only)
+    except Exception:
+        pass
     cursor.close()

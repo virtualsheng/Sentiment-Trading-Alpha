@@ -311,7 +311,7 @@ def close_expired_positions(db, alpaca_pending: Optional[list] = None) -> List[D
         except Exception:
             pass
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     now_utc = now.replace(tzinfo=timezone.utc)
 
     open_positions = (
@@ -445,7 +445,7 @@ def process_signals(
             {"skipped": True, "reason": "market_closed", "session": session["label"]}
         ]
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     actions: List[Dict[str, Any]] = [_expired_action(ea) for ea in expired_actions]
 
     # Portfolio cap — seed running exposure from Alpaca when connected so external
@@ -630,10 +630,12 @@ def process_signals(
             and _window_active(open_pos, now)
         )
         if open_pos and existing_pos_price > 0 and not window_blocks_close:
-            if _same_day_exit_edge_blocks_close(open_pos, existing_pos_price, now, _min_same_day_edge_pct):
+            # Direction flips always close — thesis has fundamentally changed.
+            # Same-day exit edge only applies to ticker/leverage changes within the same direction.
+            if not is_direction_flip and _same_day_exit_edge_blocks_close(open_pos, existing_pos_price, now, _min_same_day_edge_pct):
                 action_summary["action"] = "held"
                 action_summary["reason"] = "min_same_day_exit_edge"
-                print(f"[paper] {underlying}: held — min same-day exit edge not reached (need {_min_same_day_edge_pct:.1%})")
+                print(f"[paper] {underlying}: held — min same-day exit edge not reached (need {_min_same_day_edge_pct:.1f}%)")
                 action_summary["exit_edge_pct"] = round(
                     _directional_return_pct(open_pos.signal_type, open_pos.entry_price, existing_pos_price),
                     4,
@@ -731,6 +733,11 @@ def process_signals(
         else:
             _amount = _compute_vol_normalized_amount(_base_amount, conviction_level, _atr_pct)
 
+        # Apply continuous entry size_pct scaling (sigmoid allocation)
+        _size_pct = float(rec.get("size_pct", "100.0") or "100.0") / 100.0
+        _amount *= _size_pct
+        _amount = max(_amount, 1.0)
+
         if _portfolio_cap is not None:
             _remaining = max(0.0, _portfolio_cap - _open_exposure)
             if _remaining <= 0.0:
@@ -744,7 +751,7 @@ def process_signals(
             _amount = min(_amount, _remaining)
 
         if entry_price > 0:
-            window_until = datetime.utcnow() + timedelta(minutes=holding_minutes)
+            window_until = datetime.now(timezone.utc) + timedelta(minutes=holding_minutes)
             shares = round(_amount / entry_price, 6)
             new_trade = PaperTrade(
                 underlying=underlying,
@@ -843,7 +850,7 @@ def close_positions_for_removed_symbols(db, removed_symbols: List[str]) -> List[
     if not open_positions:
         return []
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     price_client = PriceClient()
     closed_positions: List[Dict[str, Any]] = []
 
@@ -936,7 +943,7 @@ def get_summary(db) -> Dict[str, Any]:
         unrealized = round(_directional_pnl(t.signal_type, t.entry_price, current, t.amount), 4)
         unrealized_pct = round(_directional_return_pct(t.signal_type, t.entry_price, current), 4)
         open_pnl += unrealized
-        now_utc = datetime.utcnow().replace(tzinfo=timezone.utc)
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=timezone.utc)
         win = t.holding_window_until
         if win and win.tzinfo is None:
             win = win.replace(tzinfo=timezone.utc)

@@ -8,7 +8,7 @@ browser scraping.
 
 import asyncio
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 from playwright.async_api import async_playwright, Page, BrowserContext
@@ -119,7 +119,7 @@ class TruthSocialScraper:
                 "id": f"ts_{i}",
                 "content": f"Breaking: Major policy shift announced regarding {query}! Markets reacting strongly. #Iran #Oil",
                 "author": "MarketWatcher",
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(timezone.utc),
                 "engagement": {"likes": random.randint(10, 500), "comments": random.randint(5, 100)}
             }
             for i in range(min(limit, 5))

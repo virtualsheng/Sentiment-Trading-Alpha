@@ -2,7 +2,7 @@
 Pydantic schemas for analysis requests and responses
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
@@ -391,7 +391,7 @@ class AnalysisResponse(BaseModel):
         description="Unique identifier for this analysis request"
     )
     timestamp: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="Timestamp of the analysis"
     )
     

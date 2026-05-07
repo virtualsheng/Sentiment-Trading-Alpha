@@ -773,7 +773,7 @@ async def rerun_analysis_snapshot(
 
         response = AnalysisResponse(
             request_id=rerun_request_id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             symbols_analyzed=symbols,
             posts_scraped=len(posts),
             sentiment_scores={
@@ -850,7 +850,7 @@ async def rerun_analysis_snapshot(
             detail={
                 "error": "Snapshot rerun failed",
                 "message": str(exc),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
 
@@ -858,16 +858,20 @@ async def rerun_analysis_snapshot(
 def _analysis_services(db: Session) -> Dict[str, Any]:
     config = get_or_create_app_config(db)
     price_cache = get_price_cache_service()
+    # Read DB overrides for strategy feature toggles (null = use logic_config.json default)
+    _ce = getattr(config, "continuous_entry_enabled", None)
+    _ra = getattr(config, "regime_adaptation_enabled", None)
+    _hd = getattr(config, "hold_decay_enabled", None)
     return {
         "config": config,
         "sentiment": SentimentService(price_cache=price_cache, logic_config=_L),
-        "signal": SignalService(logic_config=_L),
+        "signal": SignalService(logic_config=_L, continuous_entry_enabled=_ce, regime_adaptation_enabled=_ra, hold_decay_enabled=_hd),
         "materiality": MaterialityService(logic_config=_L),
         "hysteresis": HysteresisService(logic_config=_L),
         "persistence": PersistenceService(logic_config=_L),
         "backtest": BacktestService(logic_config=_L),
         "market": MarketDataService(price_cache=price_cache, logic_config=_L),
-        "pipeline": PipelineService(db=db, price_cache=price_cache, logic_config=_L),
+        "pipeline": PipelineService(db=db, price_cache=price_cache, logic_config=_L, continuous_entry_enabled=_ce, regime_adaptation_enabled=_ra, hold_decay_enabled=_hd),
     }
 
 
@@ -1431,7 +1435,7 @@ async def analyze_market(
             detail={
                 "error": "Analysis timed out",
                 "message": f"Analysis exceeded {timeout_seconds} seconds",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
     except HTTPException:
@@ -1442,7 +1446,7 @@ async def analyze_market(
             detail={
                 "error": "Analysis failed",
                 "message": str(exc),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
     finally:
@@ -1500,7 +1504,7 @@ async def manual_close_trade(
     except Exception:
         current_price = float(trade.entry_price or 0.0)
         
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     from services.paper_trading import _close_position, _dispatch_alpaca_orders
     _close_position(trade, current_price, now, db, reason="Manual Close")

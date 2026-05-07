@@ -4,8 +4,10 @@ Application configuration helpers.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import ipaddress
 import json
+import socket
 import sqlite3
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -148,12 +150,49 @@ def _normalize_tracked_symbols(symbols: Any, custom_symbols: List[str]) -> List[
     return [symbol for symbol in normalized if symbol in allowed][:MAX_TRACKED_SYMBOLS]
 
 
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _is_private_url(url: str) -> bool:
+    """Check if a URL resolves to a private/reserved IP address range."""
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        return False
+    # Check common private hostnames
+    if host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+        return True
+    # Try to resolve hostname
+    try:
+        addr = socket.getaddrinfo(host, 80, socket.AF_INET, socket.SOCK_STREAM)
+        for family, _, _, _, sockaddr in addr:
+            ip = ipaddress.ip_address(sockaddr[0])
+            for net in _PRIVATE_NETWORKS:
+                if ip in net:
+                    return True
+    except Exception:
+        # If resolution fails, conservatively block
+        return True
+    return False
+
+
 def _normalize_url(value: Any) -> str:
     url = str(value or "").strip()
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return ""
     if url in LEGACY_DISABLED_RSS_FEED_URLS:
+        return ""
+    if _is_private_url(url):
         return ""
     return url
 
@@ -971,6 +1010,17 @@ def update_app_config(db: Session, payload: Dict[str, Any]) -> AppConfig:
     if "alpaca_high_conviction_override_enabled" in payload:
         config.alpaca_high_conviction_override_enabled = _coerce_bool(payload.get("alpaca_high_conviction_override_enabled"), False)
 
+    # ── Strategy feature toggles (null = use logic_config.json default) ──
+    if "continuous_entry_enabled" in payload:
+        val = payload.get("continuous_entry_enabled")
+        config.continuous_entry_enabled = _coerce_bool(val, None) if val is not None else None
+    if "regime_adaptation_enabled" in payload:
+        val = payload.get("regime_adaptation_enabled")
+        config.regime_adaptation_enabled = _coerce_bool(val, None) if val is not None else None
+    if "hold_decay_enabled" in payload:
+        val = payload.get("hold_decay_enabled")
+        config.hold_decay_enabled = _coerce_bool(val, None) if val is not None else None
+
     db.add(config)
     db.commit()
     db.refresh(config)
@@ -979,7 +1029,7 @@ def update_app_config(db: Session, payload: Dict[str, Any]) -> AppConfig:
 
 def mark_analysis_started(db: Session, request_id: str) -> AppConfig:
     config = get_or_create_app_config(db)
-    config.last_analysis_started_at = datetime.utcnow()
+    config.last_analysis_started_at = datetime.now(timezone.utc)
     config.last_analysis_request_id = request_id
     db.add(config)
     db.commit()
@@ -989,7 +1039,7 @@ def mark_analysis_started(db: Session, request_id: str) -> AppConfig:
 
 def mark_analysis_completed(db: Session, request_id: str) -> AppConfig:
     config = get_or_create_app_config(db)
-    config.last_analysis_completed_at = datetime.utcnow()
+    config.last_analysis_completed_at = datetime.now(timezone.utc)
     config.last_analysis_request_id = request_id
     db.add(config)
     db.commit()
@@ -1004,7 +1054,7 @@ def try_acquire_analysis_lock(
 ) -> bool:
     """Atomically claim the analysis run lease if it is free or expired."""
     get_or_create_app_config(db)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=max(60, int(lease_seconds)))
     updated = (
         db.query(AppConfig)
@@ -1035,7 +1085,7 @@ def refresh_analysis_lock(
     lease_seconds: int = 20 * 60,
 ) -> bool:
     """Extend an existing analysis lease for long-running jobs."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=max(60, int(lease_seconds)))
     updated = (
         db.query(AppConfig)
@@ -1103,7 +1153,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
 
     if auto_run_enabled and config.last_analysis_started_at:
         next_run_at = config.last_analysis_started_at + timedelta(minutes=auto_run_interval_minutes)
-        remaining = int((next_run_at - datetime.utcnow()).total_seconds())
+        remaining = int((next_run_at - datetime.now(timezone.utc)).total_seconds())
         seconds_until_next = max(0, remaining)
         can_auto_run_now = seconds_until_next == 0
     elif not auto_run_enabled:
@@ -1185,6 +1235,10 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "trail_on_window_expiry": bool(getattr(config, "trail_on_window_expiry", True)),
         "reentry_cooldown_minutes": getattr(config, "reentry_cooldown_minutes", None),
         "min_same_day_exit_edge_pct": getattr(config, "min_same_day_exit_edge_pct", None),
+        # Strategy feature toggles (null = use logic_config.json default)
+        "continuous_entry_enabled": getattr(config, "continuous_entry_enabled", None),
+        "regime_adaptation_enabled": getattr(config, "regime_adaptation_enabled", None),
+        "hold_decay_enabled": getattr(config, "hold_decay_enabled", None),
         # Alpaca brokerage execution settings
         "alpaca_execution_mode":         _normalize_alpaca_execution_mode(
             getattr(config, "alpaca_execution_mode", DEFAULT_ALPACA_EXECUTION_MODE)

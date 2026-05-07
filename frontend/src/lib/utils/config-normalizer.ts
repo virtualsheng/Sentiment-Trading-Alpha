@@ -69,6 +69,11 @@ export type AppConfig = {
     take_profit_pct: number | null;
     materiality_min_posts_delta: number | null;
     materiality_min_sentiment_delta: number | null;
+    // ── Strategy feature toggles (null = use logic_config.json default) ──
+    continuous_entry_enabled: boolean | null;
+    regime_adaptation_enabled: boolean | null;
+    hold_decay_enabled: boolean | null;
+
     logic_defaults: {
         paper_trade_amount: number;
         entry_threshold: number;
@@ -166,6 +171,9 @@ export const EMPTY_CONFIG: AppConfig = {
     trail_on_window_expiry: true,
     reentry_cooldown_minutes: null,
     min_same_day_exit_edge_pct: null,
+    continuous_entry_enabled: null,
+    regime_adaptation_enabled: null,
+    hold_decay_enabled: null,
     remote_snapshot_enabled: false,
     telegram_remote_control_enabled: false,
     telegram_remote_control_banner_active: false,

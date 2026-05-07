@@ -5,13 +5,13 @@ In-memory runtime health tracking for user-facing diagnostics.
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Deque, Dict, Optional
 
 
 _lock = Lock()
-_started_at = datetime.utcnow()
+_started_at = datetime.now(timezone.utc)
 _request_count = 0
 _request_latency_total_ms = 0.0
 _recent_data_pulls: Deque[Dict[str, Any]] = deque(maxlen=6)
@@ -50,7 +50,7 @@ def record_data_pull(
         "summary": summary,
         "details": details or {},
         "error": error,
-        "checked_at": datetime.utcnow(),
+        "checked_at": datetime.now(timezone.utc),
     }
     with _lock:
         _recent_data_pulls.appendleft(event)
@@ -71,7 +71,7 @@ def record_analysis_result(
                 "request_id": request_id,
                 "duration_ms": float(duration_ms) if duration_ms is not None else None,
                 "active_model": active_model,
-                "completed_at": datetime.utcnow(),
+                "completed_at": datetime.now(timezone.utc),
                 "error": error,
             }
         )
@@ -92,7 +92,7 @@ def get_runtime_snapshot() -> Dict[str, Any]:
             "completed_at": _serialize_timestamp(_last_analysis.get("completed_at")),
         }
 
-    uptime_seconds = max(0, int((datetime.utcnow() - _started_at).total_seconds()))
+    uptime_seconds = max(0, int((datetime.now(timezone.utc) - _started_at).total_seconds()))
     return {
         "started_at": _serialize_timestamp(_started_at),
         "uptime_seconds": uptime_seconds,

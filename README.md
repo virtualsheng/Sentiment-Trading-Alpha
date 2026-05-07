@@ -1,6 +1,6 @@
 # Sentiment Trading Alpha
 
-A geopolitical sentiment pipeline that reads the news, reasons about it with a local LLM, and generates trade recommendations for USO, IBIT, QQQ, and SPY — including leveraged execution tickers when confidence is high enough to warrant it. Runs automatically every 30 minutes.
+A geopolitical sentiment pipeline that reads the news, reasons about it with a local LLM, and generates trade recommendations for USO, IBIT, QQQ, and SPY — including leveraged execution tickers when confidence is high enough to warrant it. Runs automatically on a user set schedule (default 30 minutes).
 
 > **This is experimental software. It is not financial advice. Do not trade real money with it.**
 
@@ -8,12 +8,36 @@ Licensed under the [Apache License, Version 2.0](LICENSE).
 
 ---
 
-## Want more detail? 
-A reference doc covering the API, schema migrations, position sizing math, validation sources, and other advanced topics is in REFERENCE.md.
+## Quick Start
+
+```bash
+# Terminal 1 — Start Ollama
+ollama pull qwen3.5:9b
+ollama serve
+
+# Terminal 2 — Start the backend
+pip install -r requirements.txt
+playwright install chromium
+python run.py                              # Windows
+python3.12 run.py                          # macOS
+
+# Terminal 3 — Start the frontend
+cd frontend
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+That's it. The ingestion worker starts automatically when the backend boots. No database setup, no config file editing. If you want admin token protection, Alpaca integration, Telegram notifications, or custom symbols, see the [Admin Controls](#admin-controls) section.
+
+For a deeper reference covering the API, schema migrations, position sizing math, validation sources, and other advanced topics, see [REFERENCE.md](REFERENCE.md).
+
+---
 
 ## How It Works
 
-### The pipeline
+### The Pipeline
 
 1. **Ingestion** — A background worker continuously polls RSS feeds, extracts full article text, and queues rows in a local SQLite database.
 2. **Analysis** — Every 30 minutes the main batch job consumes queued articles, runs a two-stage LLM pipeline (entity extraction → financial reasoning), and overlays structured validation data from FRED and EIA.
@@ -21,7 +45,7 @@ A reference doc covering the API, schema migrations, position sizing math, valid
 4. **Paper trading** — Every signal auto-simulates a volatility-normalized paper trade. Position size is based on 14-day ATR and conviction level, not a flat dollar amount.
 5. **Live trading (optional)** — Alpaca brokerage integration mirrors paper trade opens and closes to real orders in real time, with configurable guardrails.
 
-### Signal logic
+### Signal Logic
 
 | Bluster Score | Policy Score | Signal | Leverage |
 |---|---|---|---|
@@ -31,7 +55,7 @@ A reference doc covering the API, schema migrations, position sizing math, valid
 
 Scores are computed in Python from LLM-extracted facts — the model never outputs raw floats. Unconfirmed policy news is discounted before threshold comparison.
 
-### Execution tickers
+### Execution Tickers
 
 The analysis reasons about underlying symbols, but recommendations convert to actual broker-tradable tickers when leverage applies:
 
@@ -54,20 +78,7 @@ Bitcoin and oil are capped at 2x leverage.
 
 ---
 
-## Security
-
-This repo is designed for **local single-user use**.
-
-- The backend binds to `127.0.0.1` by default. Do not expose port `8000` publicly without adding auth and rate limiting.
-- Sensitive admin routes can be protected with `ADMIN_API_TOKEN` (see setup below).
-- API keys for Telegram and Alpaca are stored in the OS keychain via `keyring` — never in the repo.
-- Generated databases, caches, and build output are excluded from git.
-
----
-
 ## Setup
-
-> If you don't have the experience (or the willingness to ask an LLM) to get through this setup, you should probably not be giving this thing money to trade stocks.
 
 ### Prerequisites
 
@@ -75,39 +86,57 @@ This repo is designed for **local single-user use**.
 - **Node.js 20.9+**
 - **[Ollama](https://ollama.com)** with at least one compatible model pulled
 
----
+### 1. Start Ollama
 
-### Windows (PowerShell)
+Pull and serve a model:
 
-#### 1. Start Ollama
-
-```powershell
+```bash
 ollama pull qwen3.5:9b
 ollama serve
 ```
 
 Optional — override which model the backend uses:
 
-```powershell
+```bash
+# Windows (PowerShell)
 $env:OLLAMA_MODEL = "qwen3.5:9b"
 $env:OLLAMA_URL   = "http://localhost:11434/api/generate"
+
+# macOS (zsh/bash)
+export OLLAMA_MODEL="qwen3.5:9b"
+export OLLAMA_URL="http://localhost:11434/api/generate"
 ```
 
 If `OLLAMA_MODEL` is unset, the backend uses whichever model Ollama is currently serving.
 
-#### 2. Start the backend
+### 2. Start the Backend
 
-Create a virtualenv with Python 3.12, then:
+Create and activate a Python 3.12 virtual environment, then:
 
-```powershell
+```bash
 pip install -r requirements.txt
 playwright install chromium
+```
+
+**Windows:**
+
+```powershell
 python run.py
 ```
 
 `run.py` sets the correct Windows event loop policy before Uvicorn starts (required for Playwright) and defaults hot reload to off. Uvicorn's reload mode breaks Playwright on Windows — leave it off unless you know what you're doing.
 
-Optional environment overrides:
+**macOS:**
+
+```bash
+python3.12 run.py
+```
+
+#### Optional: Admin API Token
+
+If `ADMIN_API_TOKEN` is set, these routes require an `X-Admin-Token` header: `GET /api/v1/config`, `PUT /api/v1/config`, `POST /api/v1/trades/{trade_id}/execute`, and all `/api/v1/alpaca/*` routes.
+
+**Windows:**
 
 ```powershell
 $env:ADMIN_API_TOKEN                 = "choose-a-long-random-string"
@@ -115,13 +144,19 @@ $env:INGESTION_STARTUP_GRACE_SECONDS = "20"
 python run.py
 ```
 
-If `ADMIN_API_TOKEN` is set, these routes require an `X-Admin-Token` header: `GET /api/v1/config`, `PUT /api/v1/config`, `POST /api/v1/trades/{trade_id}/execute`, and all `/api/v1/alpaca/*` routes.
+**macOS:**
 
-Telegram and Alpaca credentials are saved from the Admin UI and stored in Windows Credential Manager via `keyring`.
+```bash
+export ADMIN_API_TOKEN="choose-a-long-random-string"
+export INGESTION_STARTUP_GRACE_SECONDS="20"
+python3.12 run.py
+```
 
-#### 3. Start the frontend
+Telegram and Alpaca credentials are saved from the Admin UI and stored in the OS keychain via `keyring` (Windows Credential Manager on Windows, Keychain Access on macOS) — never in the repo.
 
-```powershell
+### 3. Start the Frontend
+
+```bash
 cd frontend
 npm install
 npm run dev
@@ -129,8 +164,17 @@ npm run dev
 
 If `ADMIN_API_TOKEN` is set on the backend, set it here too:
 
+**Windows (PowerShell):**
+
 ```powershell
 $env:ADMIN_API_TOKEN = "choose-a-long-random-string"
+npm run dev
+```
+
+**macOS (bash/zsh):**
+
+```bash
+export ADMIN_API_TOKEN="choose-a-long-random-string"
 npm run dev
 ```
 
@@ -140,68 +184,13 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ---
 
-### macOS (zsh / bash)
-
-#### 1. Start Ollama
-
-```bash
-ollama pull qwen3.5:9b
-ollama serve
-```
-
-Optional — add to `~/.zshrc` to persist, or set inline:
-
-```bash
-export OLLAMA_MODEL="qwen3.5:9b"
-export OLLAMA_URL="http://localhost:11434/api/generate"
-```
-
-#### 2. Start the backend
-
-Create a virtualenv with Python 3.12, then:
-
-```bash
-python3.12 -m pip install -r requirements.txt
-playwright install chromium
-python3.12 run.py
-```
-
-Optional environment overrides:
-
-```bash
-export ADMIN_API_TOKEN="choose-a-long-random-string"
-export INGESTION_STARTUP_GRACE_SECONDS="20"
-python3.12 run.py
-```
-
-Same admin token behavior as Windows. Telegram and Alpaca credentials are stored in macOS Keychain Access.
-
-#### 3. Start the frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-If `ADMIN_API_TOKEN` is set on the backend:
-
-```bash
-export ADMIN_API_TOKEN="choose-a-long-random-string"
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000).
-
----
-
 ## Admin Controls
 
 The Admin page is where you configure everything. Changes persist in the database and survive restarts.
 
 - **Analysis Depth** — Light / Normal / Detailed controls article count per feed and pipeline behavior
 - **Model Orchestration** — Stage 1 (extraction) and Stage 2 (reasoning) model selectors; optional Light Web Research toggle
-- **Trading Logic** — session hours, base trade amount, entry threshold, stop loss, take profit, re-entry cooldown, trailing stop behavior, and portfolio cap
+- **Trading Logic** — session hours, base trade amount, entry threshold, stop loss, take profit, re-entry cooldown, trailing stop behavior, portfolio cap, and strategy feature toggles (continuous entry sizing, regime adaptation, separate hold decay)
 - **Symbols** — enable/disable default symbols (USO, IBIT, QQQ, SPY); add up to 3 custom symbols
 - **RSS Sources** — enable/disable built-in feeds; add up to 3 custom feeds with display labels
 - **Prompt Overrides** — per-symbol specialist prompt guidance
@@ -227,11 +216,75 @@ When Alpaca keys are configured and live trading is enabled, every paper trade o
 
 ---
 
+## Security
+
+This repo is designed for **local single-user use**.
+
+- The backend binds to `127.0.0.1` by default. Do not expose port `8000` publicly without adding auth and rate limiting.
+- Sensitive admin routes can be protected with `ADMIN_API_TOKEN` (see [Setup](#2-start-the-backend)).
+- API keys for Telegram and Alpaca are stored in the OS keychain via `keyring` — never in the repo.
+- Generated databases, caches, and build output are excluded from git.
+
+---
+
+## Troubleshooting / Verbose Mode
+
+When things aren't working as expected, start the backend and/or frontend with debug logging to see every request, response, and internal detail.
+
+### Backend
+
+```bash
+# Windows
+python run.py --verbose
+
+# macOS
+python3.12 run.py --verbose
+
+# Or via environment variable
+$env:VERBOSE = "1"      # Windows
+export VERBOSE="1"       # macOS
+```
+
+Verbose mode:
+- Sets uvicorn's log level to `debug` (showing every HTTP request including price polling)
+- Removes the price-endpoint access-log suppression filter so all endpoint activity is visible
+- Sets the `VERBOSE` environment variable for other backend modules to check
+
+### Frontend
+
+```bash
+cd frontend
+npm run dev:verbose
+```
+
+The `dev:verbose` script sets `NEXT_PUBLIC_VERBOSE=true` so frontend code can conditionally enable `console.debug()` output.
+
+### Both at Once (Root-Level Convenience Scripts)
+
+```bash
+# Normal startup — runs backend + frontend concurrently
+npm run start
+
+# Verbose startup — runs both with debug logging
+npm run start:verbose
+```
+
+Individual component scripts are also available:
+
+| Script | Description |
+|---|---|
+| `npm run start:backend` | Start backend only (normal) |
+| `npm run start:backend:verbose` | Start backend with debug logging |
+| `npm run start:frontend` | Start frontend only (normal) |
+| `npm run start:frontend:verbose` | Start frontend with verbose mode |
+
+---
+
 ## Upgrading
 
 The backend runs schema migrations automatically on every startup. If you're pulling new code, just restart:
 
-```powershell
+```bash
 # Windows
 python run.py
 

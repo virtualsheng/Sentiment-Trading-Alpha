@@ -8,6 +8,7 @@ schemas (TradingSignal) between service layers to avoid circular imports.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional
 
 from config.logic_loader import LOGIC
@@ -18,11 +19,47 @@ from services.trading_instruments import INSTRUMENT_SPECS
 from services.data_ingestion.yfinance_client import PriceClient
 
 
+def _sigmoid_size_pct(
+    abs_score: float,
+    midpoint: float = 0.42,
+    steepness: float = 6.0,
+    min_size: float = 10.0,
+    max_size: float = 100.0,
+    skip_floor: float = 0.10,
+) -> float:
+    """
+    Map |directional_score| to a position size percentage via sigmoid.
+
+    At |score| = midpoint => 50% of full size.
+    Below skip_floor => 0% (skip entirely).
+    """
+    if abs_score < skip_floor:
+        return 0.0
+    return min_size + (max_size - min_size) / (1.0 + math.exp(-steepness * (abs_score - midpoint)))
+
+
+def _decay_factor(age_hours: float, half_life: float, min_factor: float = 0.10) -> float:
+    """Exponential decay: factor = max(min_factor, 0.5^(age/half_life))."""
+    if age_hours <= 0.0:
+        return 1.0
+    raw = 0.5 ** (age_hours / half_life)
+    return max(min_factor, raw)
+
+
 class SignalService:
     """Encapsulates blue-team signal generation and red-team consensus logic."""
 
-    def __init__(self, logic_config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        logic_config: dict[str, Any],
+        continuous_entry_enabled: Optional[bool] = None,
+        regime_adaptation_enabled: Optional[bool] = None,
+        hold_decay_enabled: Optional[bool] = None,
+    ) -> None:
         self._L = logic_config
+        self._continuous_entry_enabled = continuous_entry_enabled
+        self._regime_adaptation_enabled = regime_adaptation_enabled
+        self._hold_decay_enabled = hold_decay_enabled
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -70,37 +107,129 @@ class SignalService:
         entry_threshold = _et["closed_market"] if is_closed_hysteresis else (entry_threshold_override or _et["normal"])
         keep_threshold = _et["keep_closed_market"] if is_closed_hysteresis else (entry_threshold_override or _et["keep_normal"])
 
+        # ── Regime adaptation: adjust entry threshold based on volatility ──
+        _ra = self._L.get("regime_adaptation", {})
+        _regime_adaptation_active = self._regime_adaptation_enabled if self._regime_adaptation_enabled is not None else _ra.get("enabled", True)
+        if _regime_adaptation_active:
+            _max_atr = self._max_atr_pct(symbols, price_context)
+            if _max_atr >= float(_ra.get("high_vol_atr_pct", 3.0)):
+                entry_threshold *= float(_ra.get("high_vol_multiplier", 1.25))
+            elif _max_atr <= float(_ra.get("low_vol_atr_pct", 1.0)):
+                entry_threshold *= float(_ra.get("low_vol_multiplier", 0.80))
+
+        # ── Continuous entry config ──
+        _ce = self._L.get("continuous_entry", {})
+        _ce_enabled = self._continuous_entry_enabled if self._continuous_entry_enabled is not None else _ce.get("enabled", True)
+
         for sym, result in sentiment_results.items():
             directional = result.get('directional_score', 0.0)
             confidence = result['confidence']
             specialist_signal = str(result.get('signal_type', 'HOLD')).upper()
             specialist_urgency = str(result.get('urgency', 'LOW')).upper()
-            previous_action = str((previous_recommendations.get(sym) or {}).get("action", "") or "").upper().strip()
+            previous_rec = previous_recommendations.get(sym) or {}
+            previous_action = str(previous_rec.get("action", "") or "").upper().strip()
 
-            # Apply half-life decay: reduces effective signal strength as news ages.
-            # Fresh analysis (signal_age_hours=0) → decay_factor=1.0, no effect.
+            # ── Decay: use separate hold half-life for existing positions ──
+            has_existing = bool(previous_action)
             decay_factor = self._compute_decay_factor(sym, signal_age_hours)
+            hold_decay_factor = self._compute_hold_decay_factor(sym, signal_age_hours)
             effective_directional = directional * decay_factor if directional is not None else directional
+            effective_hold_directional = directional * hold_decay_factor if directional is not None else directional
 
-            # Explicit null check — use `is not None` for numeric comparisons
-            if effective_directional is not None and (
-                effective_directional <= -entry_threshold or
-                (previous_action == "SELL" and effective_directional <= -keep_threshold)
-            ):
-                action = "SELL"
-                urgency = specialist_urgency if specialist_signal == "SHORT" else ("HIGH" if abs(effective_directional) > 0.7 else "MEDIUM")
-                short_recommendations += 1
-            elif effective_directional is not None and (
-                effective_directional >= entry_threshold or
-                (previous_action == "BUY" and effective_directional >= keep_threshold)
-            ):
-                action = "BUY"
-                urgency = specialist_urgency if specialist_signal == "LONG" else ("HIGH" if effective_directional > 0.7 else "MEDIUM")
-                long_recommendations += 1
+            if _ce_enabled:
+                # ── Continuous entry sizing ──
+                _abs = abs(effective_directional) if effective_directional is not None else 0.0
+                _ce_mid = float(_ce.get("sigmoid_midpoint", 0.42))
+                _ce_steep = float(_ce.get("sigmoid_steepness", 6.0))
+                _ce_min = float(_ce.get("min_size_pct", 10.0))
+                _ce_max = float(_ce.get("max_size_pct", 100.0))
+                _ce_skip = float(_ce.get("skip_floor", 0.10))
+                _ce_keep = float(_ce.get("keep_floor", 0.10))
+
+                if effective_directional is not None and effective_directional <= -_ce_skip:
+                    # Bearish direction
+                    if has_existing and previous_action in ("SELL", "BUY") and effective_hold_directional >= -_ce_keep:
+                        # Shrink existing position proportionally instead of closing
+                        _entry_sz = _sigmoid_size_pct(abs(effective_directional), _ce_mid, _ce_steep, _ce_min, _ce_max, 0.0)
+                        _prev_sz = float(previous_rec.get("size_pct", _ce_max) or _ce_max)
+                        size_pct = max(_ce_min, min(_ce_max, _entry_sz * _prev_sz / max(_ce_mid, 0.01)))
+                        action = "SELL"
+                        urgency = specialist_urgency if specialist_signal == "SHORT" else ("HIGH" if abs(effective_directional) > 0.7 else "MEDIUM")
+                        short_recommendations += 1
+                    elif effective_directional <= -entry_threshold or (previous_action == "SELL" and effective_directional <= -keep_threshold):
+                        size_pct = _sigmoid_size_pct(_abs, _ce_mid, _ce_steep, _ce_min, _ce_max, _ce_skip)
+                        action = "SELL"
+                        urgency = specialist_urgency if specialist_signal == "SHORT" else ("HIGH" if abs(effective_directional) > 0.7 else "MEDIUM")
+                        short_recommendations += 1
+                    elif has_existing and previous_action == "SELL" and effective_hold_directional >= -_ce_keep:
+                        # Score dipped but still above keep floor — hold existing position
+                        _entry_sz = _sigmoid_size_pct(_abs, _ce_mid, _ce_steep, _ce_min, _ce_max, 0.0)
+                        _prev_sz = float(previous_rec.get("size_pct", _ce_max) or _ce_max)
+                        size_pct = max(_ce_min, min(_ce_max, _entry_sz * _prev_sz / max(_ce_mid, 0.01)))
+                        action = "SELL"
+                        urgency = "LOW"
+                        short_recommendations += 1
+                    else:
+                        action = ""
+                        size_pct = 0.0
+                        urgency = specialist_urgency if specialist_signal == "HOLD" else "LOW"
+                        hold_recommendations += 1
+                elif effective_directional is not None and effective_directional >= _ce_skip:
+                    # Bullish direction
+                    if has_existing and previous_action in ("BUY",) and effective_hold_directional <= _ce_keep:
+                        # Shrink existing position proportionally
+                        _entry_sz = _sigmoid_size_pct(_abs, _ce_mid, _ce_steep, _ce_min, _ce_max, 0.0)
+                        _prev_sz = float(previous_rec.get("size_pct", _ce_max) or _ce_max)
+                        size_pct = max(_ce_min, min(_ce_max, _entry_sz * _prev_sz / max(_ce_mid, 0.01)))
+                        action = "BUY"
+                        urgency = "LOW"
+                        long_recommendations += 1
+                    elif effective_directional >= entry_threshold or (previous_action == "BUY" and effective_directional >= keep_threshold):
+                        size_pct = _sigmoid_size_pct(_abs, _ce_mid, _ce_steep, _ce_min, _ce_max, _ce_skip)
+                        action = "BUY"
+                        urgency = specialist_urgency if specialist_signal == "LONG" else ("HIGH" if effective_directional > 0.7 else "MEDIUM")
+                        long_recommendations += 1
+                    elif has_existing and previous_action == "BUY" and effective_hold_directional <= keep_threshold:
+                        # Score dipped but still positive — hold existing position
+                        _entry_sz = _sigmoid_size_pct(_abs, _ce_mid, _ce_steep, _ce_min, _ce_max, 0.0)
+                        _prev_sz = float(previous_rec.get("size_pct", _ce_max) or _ce_max)
+                        size_pct = max(_ce_min, min(_ce_max, _entry_sz * _prev_sz / max(_ce_mid, 0.01)))
+                        action = "BUY"
+                        urgency = "LOW"
+                        long_recommendations += 1
+                    else:
+                        action = ""
+                        size_pct = 0.0
+                        urgency = specialist_urgency if specialist_signal == "HOLD" else "LOW"
+                        hold_recommendations += 1
+                else:
+                    action = ""
+                    size_pct = 0.0
+                    urgency = specialist_urgency if specialist_signal == "HOLD" else "LOW"
+                    hold_recommendations += 1
             else:
-                action = ""
-                urgency = specialist_urgency if specialist_signal == "HOLD" else "LOW"
-                hold_recommendations += 1
+                # ── Legacy binary entry gate (continuous_entry disabled) ──
+                if effective_directional is not None and (
+                    effective_directional <= -entry_threshold or
+                    (previous_action == "SELL" and effective_directional <= -keep_threshold)
+                ):
+                    action = "SELL"
+                    size_pct = 100.0
+                    urgency = specialist_urgency if specialist_signal == "SHORT" else ("HIGH" if abs(effective_directional) > 0.7 else "MEDIUM")
+                    short_recommendations += 1
+                elif effective_directional is not None and (
+                    effective_directional >= entry_threshold or
+                    (previous_action == "BUY" and effective_directional >= keep_threshold)
+                ):
+                    action = "BUY"
+                    size_pct = 100.0
+                    urgency = specialist_urgency if specialist_signal == "LONG" else ("HIGH" if effective_directional > 0.7 else "MEDIUM")
+                    long_recommendations += 1
+                else:
+                    action = ""
+                    size_pct = 0.0
+                    urgency = specialist_urgency if specialist_signal == "HOLD" else "LOW"
+                    hold_recommendations += 1
 
             leverage = self._resolve_leverage(
                 confidence,
@@ -111,6 +240,7 @@ class SignalService:
             recommendation = None
             if action:
                 recommendation = build_execution_recommendation(sym, action, leverage)
+                recommendation["size_pct"] = str(round(size_pct, 1))
                 if str(risk_profile or "").lower().strip() == "crazy":
                     sym_ctx = ((crazy_ramp_context or {}).get("symbols") or {}).get(sym.upper(), {})
                     recommendation["ramp_stage"] = "probe"
@@ -307,6 +437,9 @@ class SignalService:
 
             leverage = self._resolve_leverage(adjusted_confidence, risk_profile, action=action)
             recommendation = build_execution_recommendation(symbol, action, leverage)
+            # Pass through size_pct from blue team recommendation if not overridden
+            blue_rec = blue_rec_map.get(symbol) or {}
+            recommendation["size_pct"] = blue_rec.get("size_pct", "100.0")
             recommendations.append(recommendation)
 
             if adjusted_confidence > strongest_confidence:
@@ -620,6 +753,27 @@ class SignalService:
         raw = 0.5 ** (age_hours / half_life)
         return max(min_factor, raw)
 
+    def _compute_hold_decay_factor(self, symbol: str, age_hours: float) -> float:
+        """
+        Slower decay for positions already held.
+        Uses separate hold_half_lives from logic_config, or entry half-lives
+        if hold-specific config is not set. When hold_decay_enabled is false
+        or signal_decay is disabled, falls back to the standard decay factor.
+        """
+        decay_cfg = self._L.get("signal_decay", {})
+        if not decay_cfg.get("enabled", True) or age_hours <= 0.0:
+            return 1.0
+        _hold_decay_active = self._hold_decay_enabled if self._hold_decay_enabled is not None else decay_cfg.get("hold_decay_enabled", False)
+        if not _hold_decay_active:
+            return self._compute_decay_factor(symbol, age_hours)
+        hold_half_lives = decay_cfg.get("symbol_hold_half_lives", {})
+        half_life = float(hold_half_lives.get(
+            str(symbol).upper(),
+            decay_cfg.get("default_hold_half_life_hours", decay_cfg.get("default_half_life_hours", 3.0)),
+        ))
+        min_factor = float(decay_cfg.get("min_decay_factor", 0.10))
+        return _decay_factor(age_hours, half_life, min_factor)
+
     def _symbol_atr_pct(self, symbol: str, price_context: Optional[Dict[str, Any]]) -> float:
         if not price_context:
             return 0.0
@@ -629,3 +783,18 @@ class SignalService:
         except (TypeError, ValueError):
             return 0.0
         return atr_pct if atr_pct > 0 else 0.0
+
+    def _max_atr_pct(self, symbols: List[str], price_context: Optional[Dict[str, Any]]) -> float:
+        """Return the maximum ATR% across the given symbols."""
+        if not price_context:
+            return 0.0
+        atr_values: List[float] = []
+        for symbol in symbols:
+            indicators = price_context.get(f"technical_indicators_{str(symbol).lower()}") or {}
+            try:
+                atr_pct = float(indicators.get("atr_14_pct") or 0.0)
+            except (TypeError, ValueError):
+                atr_pct = 0.0
+            if atr_pct > 0:
+                atr_values.append(atr_pct)
+        return max(atr_values) if atr_values else 0.0

@@ -46,7 +46,7 @@ def test_crazy_profile_applies_atr_caps_per_symbol_not_per_basket():
 
     assert recs["QQQ"]["symbol"] == "TQQQ"
     assert recs["QQQ"]["leverage"] == "3x"
-    assert recs["BITO"]["symbol"] == "BITO"
+    assert recs["BITO"]["symbol"] == "IBIT"
     assert recs["BITO"]["leverage"] == "1x"
 
 

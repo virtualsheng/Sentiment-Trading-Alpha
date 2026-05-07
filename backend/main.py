@@ -9,11 +9,16 @@ import os
 import sys
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from database.engine import SessionLocal
 from database.models import AnalysisResult
@@ -25,7 +30,6 @@ from services.data_ingestion.worker import run_ingestion_cycle
 from services.data_ingestion.yfinance_client import PriceClient
 from services.ollama import get_ollama_status
 from services.runtime_health import get_runtime_snapshot, record_data_pull, record_request
-from services.analysis.cache_service import get_price_cache_service
 
 if sys.platform == "win32":
     try:
@@ -39,7 +43,10 @@ class _SuppressPricesAccessLog(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return "/api/v1/prices" not in record.getMessage()
 
-logging.getLogger("uvicorn.access").addFilter(_SuppressPricesAccessLog())
+# Skip the price-access-log suppression when VERBOSE is set so all endpoint
+# activity is visible during troubleshooting.
+if not os.getenv("VERBOSE"):
+    logging.getLogger("uvicorn.access").addFilter(_SuppressPricesAccessLog())
 
 
 async def _data_ingestion_scheduler_loop():
@@ -63,7 +70,7 @@ async def _data_ingestion_scheduler_loop():
             try:
                 config = get_or_create_app_config(db)
                 ingestion_interval = int(config.data_ingestion_interval_seconds or 900)
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 lock_request_id = str(getattr(config, "analysis_lock_request_id", "") or "").strip()
                 lock_expires_at = getattr(config, "analysis_lock_expires_at", None)
                 if lock_request_id and lock_expires_at and lock_expires_at > now:
@@ -160,6 +167,8 @@ async def _telegram_bot_loop():
 
     offset = None
     print("[telegram-bot] loop started")
+    backoff = 1
+    max_backoff = 60
     while True:
         try:
             creds   = get_telegram_credentials()
@@ -173,14 +182,17 @@ async def _telegram_bot_loop():
             if offset is None:
                 offset = await asyncio.to_thread(initialize_offset, token)
                 print(f"[telegram-bot] initialized polling offset at {offset}")
+                backoff = 1  # reset backoff after successful init
             offset = await asyncio.to_thread(poll_and_dispatch, token, chat_id, authorized_user_id, offset)
+            backoff = 1  # reset backoff after successful poll
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             print(f"[telegram-bot] loop error: {exc}")
             import traceback
             traceback.print_exc()
-            await asyncio.sleep(5)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
 
 
 async def _pnl_scheduler_loop():
@@ -218,6 +230,7 @@ async def lifespan(app: FastAPI):
     from database.migrate import migrate
     migrate()
     print("Database initialized")
+    from services.analysis.cache_service import get_price_cache_service
     get_price_cache_service()
     print("Price cache service initialized")
 
@@ -241,7 +254,8 @@ async def lifespan(app: FastAPI):
     if "*" in cors_origins:
         print("WARNING: CORS_ORIGINS contains '*'. This is not recommended outside local development.")
     if not admin_token_enabled:
-        print("NOTICE: ADMIN_API_TOKEN is not set. Config and trade execution routes are local-open.")
+        print("WARNING: ADMIN_API_TOKEN is not set. Sensitive routes (config, Alpaca, trades) are UNPROTECTED.")
+        print("WARNING: Set ADMIN_API_TOKEN environment variable to enable authentication.")
     else:
         print("Admin token protection enabled for config and trade execution routes.")
 
@@ -289,36 +303,32 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    if data_ingestion_task:
-        data_ingestion_task.cancel()
-        try:
-            await data_ingestion_task
-        except asyncio.CancelledError:
-            pass
-    
-    if pnl_scheduler_task:
-        pnl_scheduler_task.cancel()
-        try:
-            await pnl_scheduler_task
-        except asyncio.CancelledError:
-            pass
-
-    if alpaca_poll_task:
-        alpaca_poll_task.cancel()
-        try:
-            await alpaca_poll_task
-        except asyncio.CancelledError:
-            pass
-
-    if telegram_bot_task:
-        telegram_bot_task.cancel()
-        try:
-            await telegram_bot_task
-        except asyncio.CancelledError:
-            pass
+    shutdown_timeout = 5.0  # seconds to wait for each task
+    for task, name in [
+        (data_ingestion_task, "data_ingestion"),
+        (pnl_scheduler_task, "pnl_scheduler"),
+        (alpaca_poll_task, "alpaca_poll"),
+        (telegram_bot_task, "telegram_bot"),
+    ]:
+        if task:
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=shutdown_timeout)
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                print(f"[shutdown] {name} task did not finish within {shutdown_timeout}s")
 
     print("Shutting down gracefully...")
 
+
+# ── Rate limiter ─────────────────────────────────────────────────────────────
+# 60 requests/minute for most endpoints, 10/minute for sensitive mutation endpoints
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["60/minute"],
+    enabled=True,
+)
 
 app = FastAPI(
     title="3x Leveraged Sentiment Trading System",
@@ -336,16 +346,66 @@ to generate trading signals for 3x leveraged ETFs (USO, BITO).
     lifespan=lifespan,
 )
 
-allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+# ── CORS ─────────────────────────────────────────────────────────────────────
+# Forbid wildcard CORS when credentials are enabled
+raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+
+if "*" in allowed_origins:
+    # Can't use credentials with '*'; downgrade to no-credentials mode
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-Admin-Token"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-Admin-Token"],
+    )
+
+
+# ── Security headers middleware ──────────────────────────────────────────────
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
+# ── Request size limit middleware ────────────────────────────────────────────
+MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
+
+@app.middleware("http")
+async def limit_request_body_size(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_BODY_SIZE:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "Request body too large"},
+                )
+        except (ValueError, TypeError):
+            pass
+    response = await call_next(request)
+    return response
+
+
+# ── Request metrics middleware ───────────────────────────────────────────────
 @app.middleware("http")
 async def track_request_metrics(request: Request, call_next):
     started = time.perf_counter()
@@ -427,7 +487,7 @@ async def health_check():
 
     return {
         "status": overall_status,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": "1.0.0",
         "database_status": db_status,
         "runtime": {
@@ -460,7 +520,7 @@ async def health_check():
 async def get_metrics():
     """Get system metrics including request counts and latency stats."""
     return {
-        "uptime_seconds": os.getenv("APP_START_TIME"),
+        "uptime_seconds": None,
         "total_requests": 0,
         "avg_latency_ms": 0.0,
         "database_status": "connected",
@@ -474,10 +534,12 @@ app.include_router(analysis_router, prefix="/api/v1", tags=["API"])
 if __name__ == "__main__":
     import uvicorn
 
+    log_level = "debug" if os.getenv("VERBOSE") else "info"
+
     uvicorn.run(
         "main:app",
         host=os.getenv("HOST", "127.0.0.1"),
         port=int(os.getenv("PORT", "8000")),
         reload=True,
-        log_level="info",
+        log_level=log_level,
     )

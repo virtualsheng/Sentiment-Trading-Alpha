@@ -376,6 +376,11 @@ class AppConfig(Base):
     reentry_cooldown_minutes = Column(Integer, nullable=True, default=None)
     min_same_day_exit_edge_pct = Column(Float, nullable=True, default=None)
 
+    # ── Strategy feature toggles (null = use logic_config.json default) ─────
+    continuous_entry_enabled = Column(Boolean, nullable=True, default=None)
+    regime_adaptation_enabled = Column(Boolean, nullable=True, default=None)
+    hold_decay_enabled = Column(Boolean, nullable=True, default=None)
+
     # ── Alpaca brokerage execution ────────────────────────────────────────────
     alpaca_execution_mode         = Column(String(10),  nullable=False, default="off")  # off | paper | live
     alpaca_pre_stop_mode          = Column(String(10),  nullable=True,  default=None)   # saved by /stop bot command
@@ -443,6 +448,26 @@ class AlpacaOrder(Base):
     created_at        = Column(DateTime(timezone=True), nullable=False, default=func.now())
     is_orphan             = Column(Boolean, nullable=False, default=False)
     orphan_acknowledged   = Column(Boolean, nullable=False, default=False)
+
+class AuditLog(Base):
+    """
+    Audit trail for state-changing operations.
+    Every config change, trade execution, secret save/clear, and data reset is recorded here.
+    """
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    action = Column(String(50), nullable=False, index=True)         # e.g. config_update, trade_execute
+    resource = Column(String(50), nullable=False, index=True)       # e.g. config, trade, alpaca_secret
+    resource_id = Column(String(100), nullable=True)                # specific ID if applicable
+    detail = Column(Text, nullable=True)                            # human-readable description
+    event_metadata = Column("event_metadata", JSON, nullable=True)  # structured before/after context
+    created_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
+
+    __table_args__ = (
+        Index("ix_audit_log_action_resource", "action", "resource"),
+        Index("ix_audit_log_created_at", "created_at"),
+    )
 
 
 # Create all tables

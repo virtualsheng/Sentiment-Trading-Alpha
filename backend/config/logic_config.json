@@ -1,19 +1,20 @@
 {
   "_readme": "Trading logic defaults. Fields marked admin:true are also editable via the admin UI and stored in the database — the DB value takes precedence over these defaults when set.",
-
   "paper_trade_amount": 100.0,
-
   "vol_sizing": {
     "_comment": "Volatility-normalized sizing: size = (target_daily_vol_pct/100 × base_amount) / (ATR_14d_pct/100), scaled by conviction. Applies to paper trades and Alpaca notional.",
     "enabled": true,
     "target_daily_vol_pct": 1.0,
-    "conviction_scalars": {"HIGH": 1.5, "MEDIUM": 1.0, "LOW": 0.5},
+    "conviction_scalars": {
+      "HIGH": 1.5,
+      "MEDIUM": 1.0,
+      "LOW": 0.5
+    },
     "min_size_multiple": 0.25,
     "max_size_multiple": 5.0,
     "_comment_cap": "portfolio_cap_usd: maximum total open exposure across all symbols. null = no cap. When set, individual trade sizes are scaled down to fit within the remaining capacity.",
     "portfolio_cap_usd": null
   },
-
   "entry_thresholds": {
     "normal": 0.42,
     "closed_market": 0.42,
@@ -22,24 +23,31 @@
     "hysteresis_max_post_delta": 5,
     "hysteresis_max_sentiment_delta": 0.20
   },
-
+  "continuous_entry": {
+    "_comment": "Replaces the binary entry gate with a sigmoid curve. size_pct = min + (max - min) / (1 + exp(-steepness * (|score| - midpoint))). At |score|=midpoint the position is 50% of full size. Scores below skip_floor get 0% (skip entirely).",
+    "enabled": true,
+    "sigmoid_midpoint": 0.42,
+    "sigmoid_steepness": 6.0,
+    "min_size_pct": 10.0,
+    "max_size_pct": 100.0,
+    "_comment_skip_floor": "Absolute directional_score below this threshold skips the signal entirely (no entry, even at min_size). Prevents micro-signals from creating noise.",
+    "skip_floor": 0.10,
+    "_comment_shrink_existing": "When an existing position's score stays above keep_floor, shrink proportionally instead of closing. Below keep_floor, close entirely.",
+    "keep_floor": 0.10
+  },
   "reentry_cooldown_minutes": 120,
   "min_same_day_exit_edge_pct": 0.5,
-
   "stop_loss_pct": 2.0,
   "take_profit_pct": 3.0,
-
   "leverage": {
     "_comment": "ATR-based volatility caps. When 14-day ATR % exceeds high_vol_atr_pct the position is capped at 1x regardless of profile. Exceeding medium_vol_atr_pct caps at 2x. Conservative profile (inverse ETF) is unaffected.",
     "high_vol_atr_pct": 3.0,
     "medium_vol_atr_pct": 1.5
   },
-
   "trailing_stop": {
     "_comment": "When a HOLD signal fires on an open position, a trailing stop is set instead of forcing a market close. Stop = best_price_seen × (1 ± stop_loss_pct × tighten_factor). Updated every run while in trailing mode.",
     "tighten_factor": 0.5
   },
-
   "materiality_gate": {
     "min_posts_delta": 6,
     "min_sentiment_delta": 0.24,
@@ -51,7 +59,6 @@
     "rolling_baseline_runs": 20,
     "rolling_baseline_stddev_multiplier": 1.0
   },
-
   "sentiment_scoring": {
     "unconfirmed_bluster_penalty": 0.15,
     "bluster_phrase_weight": 1.25,
@@ -73,15 +80,15 @@
     },
     "event_base_scores": {
       "monetary_policy": 0.82,
-      "regulatory":      0.74,
-      "trade_policy":    0.72,
-      "fiscal":          0.68,
-      "geopolitical":    0.58,
-      "macro_data":      0.52,
-      "earnings":        0.44,
-      "sector_news":     0.36,
-      "noise":           0.08,
-      "default":         0.30
+      "regulatory": 0.74,
+      "trade_policy": 0.72,
+      "fiscal": 0.68,
+      "geopolitical": 0.58,
+      "macro_data": 0.52,
+      "earnings": 0.44,
+      "sector_news": 0.36,
+      "noise": 0.08,
+      "default": 0.30
     },
     "confidence_base": 0.40,
     "confidence_source_weight": 0.38,
@@ -98,13 +105,12 @@
     "impact_severity_high": 0.60,
     "impact_severity_medium": 0.35
   },
-
   "red_team": {
     "confidence_base": 0.58,
-    "agreement_bonus": 0.08,
+    "agreement_bonus": 0.15,
     "disagreement_penalty": 0.22,
-    "evidence_bonus_per_item": 0.024,
-    "evidence_bonus_max": 0.12,
+    "evidence_bonus_per_item": 0.04,
+    "evidence_bonus_max": 0.20,
     "risk_penalty_per_item": 0.028,
     "risk_penalty_max": 0.14,
     "source_bias_penalty": 0.10,
@@ -115,12 +121,11 @@
     "flip_override_min_confidence": 0.64,
     "flip_override_min_evidence": 3,
     "stop_loss_by_urgency": {
-      "HIGH":   3.5,
+      "HIGH": 3.5,
       "MEDIUM": 2.5,
-      "LOW":    1.8
+      "LOW": 1.8
     }
   },
-
   "signal_decay": {
     "_comment": "Exponential decay on directional_score based on hours since previous analysis. decay_factor = max(min_decay_factor, 0.5^(age/half_life)). Prevents stale news from sustaining positions.",
     "enabled": true,
@@ -132,40 +137,52 @@
       "BITO": 6.0,
       "IBIT": 6.0
     },
-    "min_decay_factor": 0.10
+    "min_decay_factor": 0.10,
+    "_comment_hold": "Separate (slower) decay for positions already held. When enabled, existing positions use hold_half_lives instead of entry half-lives. Keeps positions open longer on stale-but-directionally-correct signals.",
+    "hold_decay_enabled": true,
+    "default_hold_half_life_hours": 6.0,
+    "symbol_hold_half_lives": {
+      "SPY": 4.0,
+      "QQQ": 4.0,
+      "USO": 8.0,
+      "BITO": 12.0,
+      "IBIT": 12.0
+    }
   },
-
+  "regime_adaptation": {
+    "_comment": "Adjust entry thresholds based on market volatility. When max ATR across symbols exceeds high_vol_atr, multiply threshold by high_vol_mult (harder to enter in high vol). When max ATR is below low_vol_atr, multiply by low_vol_mult (easier in quiet markets).",
+    "enabled": true,
+    "high_vol_atr_pct": 3.0,
+    "high_vol_multiplier": 1.25,
+    "low_vol_atr_pct": 1.0,
+    "low_vol_multiplier": 0.80
+  },
   "conviction": {
     "high_score_threshold": 0.6,
     "high_confidence_threshold": 0.7,
     "high_consensus_confidence": 0.75,
     "medium_consensus_confidence": 0.45,
-
     "_comment_holding": "Holding window in minutes. The position stays open at least this long before a HOLD signal can close it.",
     "holding_minutes": {
-      "SCALP":          120,
-      "SWING":          720,
-      "POSITION":       4320,
+      "SCALP": 120,
+      "SWING": 720,
+      "POSITION": 4320,
       "VOLATILE_EVENT": 120
     },
-
     "_comment_reset": "When a re-run confirms the same direction, reset (or extend) the holding window. Same/upgraded conviction resets to a full window; downgraded conviction shrinks the window. max_holding_minutes caps total hold time from original entry regardless of resets.",
     "reset_window_on_confirmation": true,
     "max_holding_minutes": {
-      "SCALP":          360,
-      "SWING":          2160,
-      "POSITION":       12960,
+      "SCALP": 360,
+      "SWING": 2160,
+      "POSITION": 12960,
       "VOLATILE_EVENT": 360
     },
-
     "_comment_expiry": "What happens when the holding window expires.",
     "close_on_window_expiry": true,
     "trail_on_window_expiry": true,
     "close_expired_during_closed_hours": true,
-
     "_comment_hold_signal": "Whether a HOLD signal is blocked from closing a position while the window is still active. true = window protects the position.",
     "hold_signal_respects_window": true,
-
     "_comment_flip": "Whether a direction flip (LONG->SHORT or vice versa) overrides the window and closes+reopens immediately.",
     "flip_overrides_window": true
   }

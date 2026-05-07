@@ -2,22 +2,19 @@
 
 import Link from "next/link";
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { Activity, WifiOff, ArrowRight, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, Clock, Info } from "lucide-react";
+import { Activity, WifiOff, ArrowRight, TrendingUp, TrendingDown, Minus, Clock } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 // Types
 import {
     FeedItem,
-    PriceQuote,
     Prices,
     AnalysisResult,
     AnalysisSnapshotItem,
     AppConfig,
     PnLSummary,
-    PnLTrade,
     OllamaStatus,
     Recommendation,
-    SentimentEntry,
 } from "@/lib/types/analysis";
 
 // Constants
@@ -26,9 +23,8 @@ import {
     LAST_VIEWED_ANALYSIS_REQUEST_ID_KEY,
     GOLDEN_DATASET_REQUEST_ID_KEY,
     ANALYSIS_STAGES,
+    SIGNAL_METRICS,
     SIGNAL_RULES,
-    UNDERLYING_PRICE_MAP,
-    EXECUTION_SYMBOLS_BY_UNDERLYING,
 } from "@/lib/constants/analysis";
 
 // Utilities
@@ -38,76 +34,21 @@ import {
     sanitizeTimingSamples,
     appendTimingSample,
     mergeTimingSamples,
-    formatSignedScore,
-    livePnl,
-    paperPnlUsd,
-    formatSignedUsd,
 } from "@/lib/utils/timing";
-
-import {
-    formatSnapshotLabel,
-    compactReasoning,
-    formatTs,
-    formatTime,
-    inferArticleSymbol,
-    getArticleAssessment,
-    signalColor,
-    signalBadge,
-} from "@/lib/utils/formatters";
-
-import {
-    buildChangeDrivers,
-    StageMetricsComparison,
-    ComparisonResultsCard,
-} from "@/lib/utils/comparison";
 
 // Components
 import SentimentTicker from "@/components/Dashboard/SentimentTicker";
 import GlassCard from "@/components/Dashboard/GlassCard";
 import PriceRow from "@/components/Dashboard/PriceRow";
 import ArticleCard from "@/components/Dashboard/ArticleCard";
-import RecommendationBadge from "@/components/Dashboard/RecommendationBadge";
-import RecommendationTooltip from "@/components/Dashboard/RecommendationTooltip";
 import SignalHero from "@/components/Dashboard/SignalHero";
 import AnalysisStatusCard from "@/components/Dashboard/AnalysisStatusCard";
 import PullHistoryCard from "@/components/Dashboard/PullHistoryCard";
 import ModelComparePanel from "@/components/Dashboard/ModelComparePanel";
 import DebugPanel from "@/components/Dashboard/DebugPanel";
 import TradeExecutionModal from "@/components/Dashboard/TradeExecutionModal";
-import TradeCard from "@/components/Dashboard/TradeCard";
 import ActualTradeComparisonCard from "@/components/Dashboard/ActualTradeComparisonCard";
 import { useTimezone } from "@/lib/timezone";
-
-// ─── Helper Functions ─────────────────────────────────
-
-function describeRecommendation(rec: Recommendation) {
-    const underlying = rec.underlying_symbol || rec.symbol;
-    const isProxy = rec.symbol !== underlying;
-    if (rec.thesis === "SHORT") {
-        return isProxy
-            ? `${rec.action} ${rec.symbol} expresses a bearish ${underlying} view`
-            : `${rec.action} ${underlying} is a direct bearish ${underlying} trade`;
-    }
-    if (rec.thesis === "LONG") {
-        return isProxy
-            ? `${rec.action} ${rec.symbol} expresses a bullish ${underlying} view`
-            : `${rec.action} ${underlying} is a direct bullish ${underlying} trade`;
-    }
-    return `${rec.action} ${rec.symbol}`;
-}
-
-function ReturnCell({ pct, label, sub }: { pct: number; label: string; sub?: string }) {
-    const pos = pct >= 0;
-    return (
-        <div>
-            <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">{label}</p>
-            <p className={`text-sm font-bold ${pos ? "text-emerald-400" : "text-red-400"}`}>
-                {pos ? "+" : ""}{pct.toFixed(2)}%
-            </p>
-            {sub && <p className="text-[10px] text-slate-600 mt-0.5">{sub}</p>}
-        </div>
-    );
-}
 
 const RECENT_ANALYSIS_TIMES_KEY = "recentAnalysisTimes";
 const MAX_RECENT_ANALYSIS_TIMES = 12;
@@ -161,7 +102,7 @@ export default function Home() {
     const [backendPhaseLabel, setBackendPhaseLabel] = useState("");
     const [selectedRecommendation, setSelectedRecommendation] = useState<Recommendation | null>(null);
     const [advancedMode, setAdvancedMode] = useState(false);
-    const [activeTab, setActiveTab] = useState<"current" | "history" | "compare" | "debug">("current");
+    const [activeTab, setActiveTab] = useState<"signal" | "history" | "compare" | "debug">("signal");
     const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null);
     const [analysisSnapshots, setAnalysisSnapshots] = useState<AnalysisSnapshotItem[]>([]);
     const [goldenDatasetRequestId, setGoldenDatasetRequestId] = useState("");
@@ -177,6 +118,8 @@ export default function Home() {
     const [savedComparisonError, setSavedComparisonError] = useState<string | null>(null);
     const [showCompletedProgressUntil, setShowCompletedProgressUntil] = useState<number | null>(null);
     const [restoringLastResult, setRestoringLastResult] = useState(true);
+    const [signalLogicExpanded, setSignalLogicExpanded] = useState(false);
+    const [logExpanded, setLogExpanded] = useState(false);
     const articleCounter = useRef(0);
     const autoRunStartedRef = useRef(false);
     const runAttemptedRef = useRef(false);
@@ -196,7 +139,7 @@ export default function Home() {
     const isAnalyzingRef = useRef(false);
     useEffect(() => { isAnalyzingRef.current = isAnalyzing; }, [isAnalyzing]);
 
-    const handleAnalyzeRef = useRef<() => void>(() => {});
+    const handleAnalyzeRef = useRef<() => void>(() => { });
     const countdownRef = useRef(countdown);
 
     const fetchConfig = useCallback(async () => {
@@ -557,7 +500,7 @@ export default function Home() {
             }
         }, 1000);
         return () => clearInterval(tick);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [config.auto_run_enabled, config.auto_run_interval_minutes, configLoaded]);
 
     useEffect(() => {
@@ -611,10 +554,6 @@ export default function Home() {
     }, [result?.request_id]);
 
     useEffect(() => {
-        if (comparisonResult || savedComparisonResult) setActiveTab("compare");
-    }, [comparisonResult, savedComparisonResult]);
-
-    useEffect(() => {
         if (!showCompletedProgressUntil) return;
         const delay = Math.max(0, showCompletedProgressUntil - Date.now());
         const id = window.setTimeout(() => setShowCompletedProgressUntil(null), delay);
@@ -622,7 +561,7 @@ export default function Home() {
     }, [showCompletedProgressUntil]);
 
     useEffect(() => {
-        if (!advancedMode && activeTab === "debug") setActiveTab("current");
+        if (!advancedMode && activeTab === "debug") setActiveTab("signal");
     }, [advancedMode, activeTab]);
 
     useEffect(() => {
@@ -666,6 +605,7 @@ export default function Home() {
         ? currentRequestTrades.find((trade) => trade.symbol === selectedRecommendation.symbol && trade.action === selectedRecommendation.action)
         : null;
     const articleItems = feed.filter((f): f is FeedItem & { kind: "article" } => f.kind === "article");
+    const logItems = feed.filter((f): f is FeedItem & { kind: "log" } => f.kind === "log");
     const mm = Math.floor(countdown / 60);
     const ss = countdown % 60;
     const stageIndex = (() => {
@@ -695,6 +635,7 @@ export default function Home() {
             : 0;
     const isWaitingForStream = isAnalyzing && !streamStartedAt;
     const showAnalysisStatusCard = isAnalyzing || justCompleted;
+    const hasCompareResults = !!(comparisonResult || savedComparisonResult);
 
     const saveTradeExecution = useCallback(async (payload: { executedAction: "BUY" | "SELL"; executedPrice: number; }) => {
         if (!selectedTrade) return;
@@ -719,7 +660,7 @@ export default function Home() {
             {/* ── Header ── */}
             <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-10">
                 <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
-                    <button type="button" onClick={() => setActiveTab("current")} className="text-left shrink-0">
+                    <button type="button" onClick={() => setActiveTab("signal")} className="text-left shrink-0">
                         <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">
                             Sentiment Trading Alpha
                         </h1>
@@ -728,32 +669,35 @@ export default function Home() {
 
                     {/* ── Primary nav tabs ── */}
                     <nav className="flex items-center gap-1 rounded-xl p-1 shrink-0" style={{ background: "rgba(15,23,42,0.8)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                        {(["current", "history", "compare", ...(advancedMode ? ["debug"] : [])] as ("current" | "history" | "compare" | "debug")[]).map((tab) => {
-                            const labels: Record<string, string> = { current: "Signal", history: "History", compare: "Compare", debug: "Debug" };
+                        {(["signal", "history", "compare", ...(advancedMode ? ["debug"] : [])] as ("signal" | "history" | "compare" | "debug")[]).map((tab) => {
+                            const labels: Record<string, string> = { signal: "Signal", history: "History", compare: "Compare", debug: "Debug" };
                             const isActive = activeTab === tab;
-                            const hasDot = tab === "compare" && (!!comparisonResult || !!savedComparisonResult);
+                            const hasDot = tab === "compare" && hasCompareResults;
                             return (
-                                <Fragment key={tab}>
-                                    {tab === "compare" && (
-                                        <Link
-                                            href="/trading"
-                                            className="flex items-center gap-1.5 rounded-lg py-1.5 px-3 text-xs font-semibold transition-colors text-emerald-400 hover:text-emerald-200 hover:bg-slate-800/60"
-                                        >
-                                            Trading
-                                        </Link>
-                                    )}
-                                    <button
-                                        type="button"
-                                        onClick={() => setActiveTab(tab)}
-                                        className={`flex items-center gap-1.5 rounded-lg py-1.5 px-3 text-xs font-semibold transition-colors ${isActive ? "bg-slate-700 text-white shadow-sm" : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
-                                            }`}
-                                    >
-                                        {labels[tab]}
-                                        {hasDot && <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />}
-                                    </button>
-                                </Fragment>
+                                <button
+                                    key={tab}
+                                    type="button"
+                                    onClick={() => setActiveTab(tab)}
+                                    className={`flex items-center gap-1.5 rounded-lg py-1.5 px-3 text-xs font-semibold transition-colors ${isActive ? "bg-slate-700 text-white shadow-sm" : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                                        }`}
+                                >
+                                    {labels[tab]}
+                                    {hasDot && <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />}
+                                </button>
                             );
                         })}
+                        <div className="w-px h-5 bg-slate-700/60 mx-1" />
+                        <button
+                            type="button"
+                            onClick={() => setAdvancedMode((current) => !current)}
+                            className={`rounded-lg py-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${advancedMode
+                                ? "bg-blue-500/20 text-blue-300 border border-blue-400/30"
+                                : "text-slate-500 hover:text-slate-300 hover:bg-slate-800/60"
+                                }`}
+                            title={advancedMode ? "Advanced mode enabled — Debug tab visible" : "Enable advanced mode to show Debug tab"}
+                        >
+                            {advancedMode ? "Adv" : "Std"}
+                        </button>
                     </nav>
 
                     <div className="flex items-center gap-3 shrink-0">
@@ -768,6 +712,9 @@ export default function Home() {
                                 {isAnalyzing ? "Analyzing…" : result ? "Ready" : "Idle"}
                             </p>
                         </div>
+                        <Link href="/trading" className="text-xs text-emerald-400 hover:text-emerald-200 border border-emerald-500/20 rounded-lg px-2.5 py-1.5">
+                            Trading
+                        </Link>
                         <Link href="/about" className="text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5">
                             About
                         </Link>
@@ -845,16 +792,6 @@ export default function Home() {
                                         : "The dashboard will use whichever local model Ollama is currently serving."}
                                 </p>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => setAdvancedMode((current) => !current)}
-                                className={`w-full mb-3 py-2 rounded-xl font-semibold text-xs border transition-colors ${advancedMode
-                                        ? "border-blue-400/40 bg-blue-500/10 text-blue-200"
-                                        : "border-slate-700 bg-slate-800/70 text-slate-300 hover:bg-slate-800"
-                                    }`}
-                            >
-                                {advancedMode ? "Advanced Mode On" : "Advanced Mode Off"}
-                            </button>
                             <button onClick={handleAnalyze} disabled={isAnalyzing}
                                 className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors ${isAnalyzing ? "bg-slate-700 cursor-not-allowed text-slate-400" : "bg-blue-600 hover:bg-blue-500 text-white"
                                     }`}>
@@ -884,17 +821,43 @@ export default function Home() {
                             )}
                         </GlassCard>
 
-                        {/* Signal Logic */}
+                        {/* Signal Logic (collapsible) */}
                         <GlassCard>
-                            <h2 className="text-sm font-semibold text-slate-300 mb-3">Signal Logic</h2>
-                            <div className="space-y-2">
-                                {SIGNAL_RULES.map(({ border, bg, label, labelColor, desc }) => (
-                                    <div key={label} className={`border-l-4 ${border} ${bg} p-2.5 rounded-r-lg`}>
-                                        <p className={`text-xs font-bold uppercase ${labelColor}`}>{label}</p>
-                                        <p className="text-[11px] font-mono text-slate-400 mt-0.5">{desc}</p>
+                            <button
+                                type="button"
+                                onClick={() => setSignalLogicExpanded((prev) => !prev)}
+                                className="w-full flex items-center justify-between text-sm font-semibold text-slate-300 mb-0"
+                            >
+                                <span>Signal Logic</span>
+                                <span className="text-slate-500 text-xs">{signalLogicExpanded ? "▲" : "▼"} {signalLogicExpanded ? "Hide" : "Show"}</span>
+                            </button>
+                            {signalLogicExpanded && (
+                                <div className="space-y-3 mt-3">
+                                    {/* Score explanations */}
+                                    <div className="space-y-2 pb-3 border-b border-slate-700/30">
+                                        <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Score Components</p>
+                                        {SIGNAL_METRICS.map(({ key, label, range, desc, color }) => (
+                                            <div key={key} className="bg-slate-800/40 rounded-lg p-2.5">
+                                                <div className="flex items-center justify-between mb-0.5">
+                                                    <p className={`text-xs font-bold ${color}`}>{label}</p>
+                                                    <span className="text-[10px] font-mono text-slate-500">{range}</span>
+                                                </div>
+                                                <p className="text-[11px] text-slate-400 leading-relaxed">{desc}</p>
+                                            </div>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
+                                    {/* Signal rules */}
+                                    <div className="space-y-2">
+                                        <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Signal Triggers</p>
+                                        {SIGNAL_RULES.map(({ border, bg, label, labelColor, desc }) => (
+                                            <div key={label} className={`border-l-4 ${border} ${bg} p-2.5 rounded-r-lg`}>
+                                                <p className={`text-xs font-bold uppercase ${labelColor}`}>{label}</p>
+                                                <p className="text-[11px] font-mono text-slate-400 mt-0.5">{desc}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </GlassCard>
 
                         {/* Run Stats */}
@@ -967,7 +930,7 @@ export default function Home() {
                                         onRecommendationClick={setSelectedRecommendation}
                                     />
 
-                                    {activeTab === "current" && (
+                                    {activeTab === "signal" && (
                                         <div className="space-y-4">
                                             <SentimentTicker data={result.sentiment_scores} />
                                             <ActualTradeComparisonCard pnlSummary={pnlSummary} currentRequestId={result.request_id} prices={prices} onCloseTrade={handleCloseTrade} />
@@ -1054,25 +1017,39 @@ export default function Home() {
                                             <span>›</span><span className="animate-pulse">▋</span>
                                         </div>
                                     )}
-                                    {[...feed].reverse().map((item, i) => {
-                                        if (item.kind === "article") {
-                                            return (
-                                                <ArticleCard
-                                                    key={i}
-                                                    item={item}
-                                                    expanded={expandedIdxs.has(item.idx)}
-                                                    onToggle={() => toggleArticle(item.idx)}
-                                                    result={result}
-                                                />
-                                            );
-                                        }
-                                        return (
-                                            <div key={i} className="flex items-start gap-2 py-0.5 text-xs text-slate-500 font-mono">
-                                                <span className="text-slate-700 shrink-0">›</span>
-                                                <span>{item.message}</span>
-                                            </div>
-                                        );
-                                    })}
+                                    {/* Articles */}
+                                    {articleItems.length > 0 && [...articleItems].reverse().map((item, i) => (
+                                        <ArticleCard
+                                            key={i}
+                                            item={item}
+                                            expanded={expandedIdxs.has(item.idx)}
+                                            onToggle={() => toggleArticle(item.idx)}
+                                            result={result}
+                                        />
+                                    ))}
+                                    {/* Pipeline Log (collapsible) */}
+                                    {logItems.length > 0 && (
+                                        <div className="mt-3 pt-3 border-t border-slate-700/30">
+                                            <button
+                                                type="button"
+                                                onClick={() => setLogExpanded((prev) => !prev)}
+                                                className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors"
+                                            >
+                                                <span>{logExpanded ? "▼" : "▶"}</span>
+                                                <span>Pipeline Log ({logItems.length})</span>
+                                            </button>
+                                            {logExpanded && (
+                                                <div className="mt-2 space-y-0">
+                                                    {[...logItems].reverse().map((item, i) => (
+                                                        <div key={i} className="flex items-start gap-2 py-0.5 text-xs text-slate-500 font-mono">
+                                                            <span className="text-slate-700 shrink-0">›</span>
+                                                            <span>{item.message}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             </GlassCard>
                         )}

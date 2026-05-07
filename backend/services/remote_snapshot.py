@@ -674,7 +674,7 @@ def process_remote_snapshot_delivery(request_id: str, force: bool = False) -> No
         png_bytes = render_remote_snapshot_png(payload)
         delivery = deliver_remote_snapshot(png_bytes, caption)
 
-        config.last_remote_snapshot_sent_at = datetime.utcnow()
+        config.last_remote_snapshot_sent_at = datetime.now(timezone.utc)
         config.last_remote_snapshot_request_id = request_id
         config.last_remote_snapshot_net_pnl = float((payload.get("pnl_summary") or {}).get("total_pnl") or 0.0)
         config.last_remote_snapshot_recommendation_fingerprint = str(payload.get("recommendation_fingerprint") or "")

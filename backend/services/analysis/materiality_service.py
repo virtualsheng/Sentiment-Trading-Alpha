@@ -61,6 +61,10 @@ class MaterialityService:
             previous_response.get("blue_team_signal") or previous_response.get("trading_signal")
         ) if previous_response else None
 
+        # ── Direction flip override: Any LONG→SHORT or SHORT→LONG flip is inherently material ──
+        if candidate_signal and previous_signal and self._any_direction_flip(previous_signal, candidate_signal):
+            return True
+
         if not self._signals_differ_materially(previous_signal, candidate_signal):
             return True
         if self._recommendation_structure_changed_without_thesis_flip(previous_signal, candidate_signal):
@@ -191,6 +195,29 @@ class MaterialityService:
             if key:
                 recs[key] = rec
         return recs
+
+    def _any_direction_flip(
+        self,
+        previous_signal: Any,
+        current_signal: TradingSignal,
+    ) -> bool:
+        """Return True if any single recommendation flips direction (LONG↔SHORT)."""
+        if previous_signal is None or current_signal is None:
+            return False
+        prev_map = self._recommendations_by_underlying(previous_signal)
+        cur_map = self._recommendations_by_underlying(current_signal)
+        for symbol in set(prev_map.keys()) & set(cur_map.keys()):
+            prev = prev_map[symbol] or {}
+            cur = cur_map[symbol] or {}
+            prev_thesis = str(prev.get("thesis") or "").upper().strip()
+            cur_thesis = str(cur.get("thesis") or "").upper().strip()
+            if not prev_thesis:
+                prev_thesis = "LONG" if str(prev.get("action") or "").upper() == "BUY" else "SHORT"
+            if not cur_thesis:
+                cur_thesis = "LONG" if str(cur.get("action") or "").upper() == "BUY" else "SHORT"
+            if prev_thesis and cur_thesis and prev_thesis != cur_thesis:
+                return True
+        return False
 
     def _max_sentiment_input_delta(
         self,

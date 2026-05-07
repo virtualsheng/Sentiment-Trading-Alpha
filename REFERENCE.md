@@ -1,7 +1,119 @@
+# Reference Documentation
+
+> Advanced configuration, API reference, position sizing math, validation sources, and other reference material for Sentiment Trading Alpha.
+
+---
+
+## Project Structure
+
+```text
+qwen-3.5-9b-getrich/
+|- backend/
+|  |- main.py
+|  |- test_stage1.py
+|  |- routers/
+|  |  |- analysis.py
+|  |  |- config.py
+|  |  `- alpaca.py
+|  |- schemas/
+|  |  `- analysis.py
+|  |- database/
+|  |  |- engine.py
+|  |  |- models.py
+|  |  `- migrate.py
+|  `- services/
+|     |- data_ingestion/
+|     |  |- parser.py
+|     |  |- scraper.py
+|     |  |- market_validation.py
+|     |  `- yfinance_client.py
+|     |- sentiment/
+|     |  |- engine.py
+|     |  `- prompts.py
+|     |- alpaca_broker.py
+|     |- secret_store.py
+|     |- runtime_health.py
+|     |- trading_instruments.py
+|     `- paper_trading.py
+|- frontend/
+|  |- src/app/page.tsx
+|  |- src/app/admin/page.tsx
+|  |- src/app/health/
+|  |- src/app/trading/
+|  |- src/lib/
+|  `- src/app/api/
+|     |- paper-trading/route.ts
+|     |- admin/price-history/
+|     `- alpaca/
+|- RELEASENOTES.md
+`- README.md
+```
+
+---
+
 ## Frontend Stack
 
 - Next.js 16.2.4
 - React 19.2
+
+---
+
+## API Reference
+
+### `POST /api/v1/analyze/stream`
+
+SSE pipeline. Events: `log`, `article`, `result`, `error`.
+
+Example request:
+```json
+{ "symbols": ["USO", "IBIT", "QQQ", "SPY"], "max_posts": 50, "lookback_days": 14 }
+```
+
+`result` payloads include:
+- `market_validation` — per-symbol FRED/EIA structured metrics
+- `model_inputs.news_context` — compiled text sent to the model
+- `model_inputs.validation_context` — validation summary injected into the prompt
+- `model_inputs.per_symbol_prompts` — exact final prompt preview for each analyst
+- `model_inputs.web_context_by_symbol` — saved per-symbol web research summary
+- `model_inputs.web_items_by_symbol` — structured web research items shown in Advanced Mode
+
+### `GET /api/v1/analysis-snapshots`
+
+Returns recent saved frozen analysis snapshots for Advanced Mode replay.
+
+### `POST /api/v1/analysis-snapshots/{request_id}/rerun`
+
+Replays a frozen snapshot. Supports single-model and two-stage pipelines.
+
+Single model:
+```json
+{ "model_name": "qwen3.5:14b" }
+```
+
+Two-stage:
+```json
+{ "extraction_model": "llama3.2:3b", "reasoning_model": "qwen3:9b" }
+```
+
+### `GET /api/v1/ollama/status`
+
+Returns whether Ollama is reachable and the active served model.
+
+### `GET /api/v1/prices`
+
+```json
+{
+  "USO":  { "price": 128.25, "change": 7.80, "change_pct": 6.47, "day_low": 121.03, "day_high": 128.88 },
+  "QQQ":  { "price": 501.12, "change": 2.31, "change_pct": 0.46, "day_low": 497.20, "day_high": 502.05 },
+  "SPY":  { "price": 612.40, "change": 1.44, "change_pct": 0.24, "day_low": 609.98, "day_high": 613.11 }
+}
+```
+
+### `GET /health` and `GET /metrics`
+
+`/health` returns model reachability, active model name, uptime, request latency, latest data-pull state, and recent analysis timing.
+
+`/metrics` is a lightweight internal summary payload.
 
 ---
 
@@ -69,51 +181,6 @@ NYT sessions typically last 30 days. When articles start showing short lengths a
 
 ---
 
-## Testing Your Extraction Model (Stage 1)
-
-Before committing to a model for Stage 1 entity extraction, run the smoke test:
-
-```powershell
-cd backend
-python test_stage1.py
-```
-
-Or with a specific model:
-
-```powershell
-python test_stage1.py llama3.2:latest
-```
-
-The test covers both built-in symbols (USO/IBIT/QQQ/SPY, which use a static keyword map and require no LLM call) and custom symbols (NVDA/NOW, which call the LLM once to generate proxy keywords). It prints:
-
-- Which keyword source was used per symbol: `(static)` or `(LLM-generated)`
-- The generated keywords for each custom symbol
-- How many articles each path caught
-- Separate pass/fail for built-in catch rate, custom symbol coverage, and noise filtering
-
-**What to look for:**
-
-| Output | Meaning |
-|---|---|
-| `Stage 1 keyword filter: 10/13 articles matched` | Working correctly |
-| `✓ PASS: Custom symbols (NVDA/NOW) caught at least 1 article` | LLM keyword generation is working |
-| `✓ PASS: LLM generated keywords for custom symbols (>1 term each)` | Keywords were successfully generated and cached |
-| `✓ PASS: Noise headlines correctly filtered out` | Sports / celebrity articles removed |
-| `Stage 1: keyword generation failed for NVDA (...)` | LLM call failed — check Ollama is running and the model is loaded |
-
-**If Stage 1 fails:**
-
-The pipeline degrades gracefully — it falls back to sending all articles to Stage 2 instead of only the relevant ones. Analysis still completes and produces signals, but Stage 2 receives more noise. If keyword generation fails for a custom symbol, the ticker name itself is used as the fallback keyword.
-
-**Model guidance:**
-
-- Stage 1 calls the LLM only to answer "what keywords appear in [SYMBOL] news?" — a short factual question. Even llama3.2 (3B) handles this reliably.
-- The article classification step (reading all headlines) has been removed — Stage 1 is now fast regardless of article count.
-- Keyword generation results are cached for the server session. Restarting the server will re-generate keywords for custom symbols on the next run.
-- The test only takes a few seconds since it skips RSS ingestion, price fetching, and validation entirely.
-
----
-
 ## Schema Migration Reference
 
 The backend runs `migrate.py` automatically on every startup. This table is for reference only — no manual SQL is required.
@@ -170,6 +237,51 @@ To run the migration manually:
 cd backend
 python -m database.migrate
 ```
+
+---
+
+## Testing Stage 1 Extraction
+
+Before committing to a model for Stage 1 entity extraction, run the smoke test:
+
+```powershell
+cd backend
+python test_stage1.py
+```
+
+Or with a specific model:
+
+```powershell
+python test_stage1.py llama3.2:latest
+```
+
+The test covers both built-in symbols (USO/IBIT/QQQ/SPY, which use a static keyword map and require no LLM call) and custom symbols (NVDA/NOW, which call the LLM once to generate proxy keywords). It prints:
+
+- Which keyword source was used per symbol: `(static)` or `(LLM-generated)`
+- The generated keywords for each custom symbol
+- How many articles each path caught
+- Separate pass/fail for built-in catch rate, custom symbol coverage, and noise filtering
+
+**What to look for:**
+
+| Output | Meaning |
+|---|---|
+| `Stage 1 keyword filter: 10/13 articles matched` | Working correctly |
+| `✓ PASS: Custom symbols (NVDA/NOW) caught at least 1 article` | LLM keyword generation is working |
+| `✓ PASS: LLM generated keywords for custom symbols (>1 term each)` | Keywords were successfully generated and cached |
+| `✓ PASS: Noise headlines correctly filtered out` | Sports / celebrity articles removed |
+| `Stage 1: keyword generation failed for NVDA (...)` | LLM call failed — check Ollama is running and the model is loaded |
+
+### If Stage 1 fails
+
+The pipeline degrades gracefully — it falls back to sending all articles to Stage 2 instead of only the relevant ones. Analysis still completes and produces signals, but Stage 2 receives more noise. If keyword generation fails for a custom symbol, the ticker name itself is used as the fallback keyword.
+
+### Model guidance
+
+- Stage 1 calls the LLM only to answer "what keywords appear in [SYMBOL] news?" — a short factual question. Even llama3.2 (3B) handles this reliably.
+- The article classification step (reading all headlines) has been removed — Stage 1 is now fast regardless of article count.
+- Keyword generation results are cached for the server session. Restarting the server will re-generate keywords for custom symbols on the next run.
+- The test only takes a few seconds since it skips RSS ingestion, price fetching, and validation entirely.
 
 ---
 
@@ -253,112 +365,6 @@ The Admin page controls how many frozen snapshots to retain. Older snapshots and
 
 ---
 
-## API Reference
-
-### `POST /api/v1/analyze/stream`
-
-SSE pipeline. Events: `log`, `article`, `result`, `error`.
-
-Example request:
-```json
-{ "symbols": ["USO", "IBIT", "QQQ", "SPY"], "max_posts": 50, "lookback_days": 14 }
-```
-
-`result` payloads include:
-- `market_validation` — per-symbol FRED/EIA structured metrics
-- `model_inputs.news_context` — compiled text sent to the model
-- `model_inputs.validation_context` — validation summary injected into the prompt
-- `model_inputs.per_symbol_prompts` — exact final prompt preview for each analyst
-- `model_inputs.web_context_by_symbol` — saved per-symbol web research summary
-- `model_inputs.web_items_by_symbol` — structured web research items shown in Advanced Mode
-
-### `GET /api/v1/analysis-snapshots`
-
-Returns recent saved frozen analysis snapshots for Advanced Mode replay.
-
-### `POST /api/v1/analysis-snapshots/{request_id}/rerun`
-
-Replays a frozen snapshot. Supports single-model and two-stage pipelines.
-
-Single model:
-```json
-{ "model_name": "qwen3.5:14b" }
-```
-
-Two-stage:
-```json
-{ "extraction_model": "llama3.2:3b", "reasoning_model": "qwen3:9b" }
-```
-
-### `GET /api/v1/ollama/status`
-
-Returns whether Ollama is reachable and the active served model.
-
-### `GET /api/v1/prices`
-
-```json
-{
-  "USO":  { "price": 128.25, "change": 7.80, "change_pct": 6.47, "day_low": 121.03, "day_high": 128.88 },
-  "QQQ":  { "price": 501.12, "change": 2.31, "change_pct": 0.46, "day_low": 497.20, "day_high": 502.05 },
-  "SPY":  { "price": 612.40, "change": 1.44, "change_pct": 0.24, "day_low": 609.98, "day_high": 613.11 }
-}
-```
-
-### `GET /health` and `GET /metrics`
-
-`/health` returns model reachability, active model name, uptime, request latency, latest data-pull state, and recent analysis timing.
-
-`/metrics` is a lightweight internal summary payload.
-
----
-
-## Project Structure
-
-```text
-qwen-3.5-9b-getrich/
-|- backend/
-|  |- main.py
-|  |- test_stage1.py
-|  |- routers/
-|  |  |- analysis.py
-|  |  |- config.py
-|  |  `- alpaca.py
-|  |- schemas/
-|  |  `- analysis.py
-|  |- database/
-|  |  |- engine.py
-|  |  |- models.py
-|  |  `- migrate.py
-|  `- services/
-|     |- data_ingestion/
-|     |  |- parser.py
-|     |  |- scraper.py
-|     |  |- market_validation.py
-|     |  `- yfinance_client.py
-|     |- sentiment/
-|     |  |- engine.py
-|     |  `- prompts.py
-|     |- alpaca_broker.py
-|     |- secret_store.py
-|     |- runtime_health.py
-|     |- trading_instruments.py
-|     `- paper_trading.py
-|- frontend/
-|  |- src/app/page.tsx
-|  |- src/app/admin/page.tsx
-|  |- src/app/health/
-|  |- src/app/trading/
-|  |- src/lib/
-|  `- src/app/api/
-|     |- paper-trading/route.ts
-|     |- admin/price-history/
-|     `- alpaca/
-|- RELEASENOTES.md
-`- README.md
-```
-
----
-
 ## Windows-Specific Notes
 
 - `run.py` sets the Windows event loop policy before Uvicorn starts, which is required for Playwright browser subprocesses
@@ -372,4 +378,3 @@ Alternative dev server modes (both platforms):
 ```powershell
 npm run dev:turbo    # Turbopack
 npm run dev:webpack  # fallback
-```

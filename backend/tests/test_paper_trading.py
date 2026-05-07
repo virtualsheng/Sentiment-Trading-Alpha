@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -81,7 +81,7 @@ def test_process_signals_closes_existing_position_using_existing_ticker_price(db
         amount=1000.0,
         shares=2.0,
         entry_price=500.0,
-        entered_at=datetime.utcnow(),
+        entered_at=datetime.now(timezone.utc),
         analysis_request_id="prev",
     )
     db_session.add(open_trade)
@@ -160,7 +160,7 @@ def test_get_summary_returns_configured_paper_trade_amount(db_session, monkeypat
             amount=1000.0,
             shares=10.0,
             entry_price=100.0,
-            entered_at=datetime.utcnow(),
+            entered_at=datetime.now(timezone.utc),
             analysis_request_id="req-1",
         )
     )
@@ -185,7 +185,7 @@ def test_spy_short_leverage_upgrade_is_not_treated_as_direction_flip(db_session)
         amount=1000.0,
         shares=2.0,
         entry_price=500.0,
-        entered_at=datetime.utcnow(),
+        entered_at=datetime.now(timezone.utc),
         analysis_request_id="prev",
     )
     db_session.add(open_trade)
@@ -243,7 +243,7 @@ def test_spy_short_leverage_upgrade_is_not_treated_as_direction_flip(db_session)
     assert new_trade.execution_ticker == "SDS"
 
 
-def test_min_same_day_exit_edge_blocks_tiny_profitable_flip(db_session):
+def test_min_same_day_exit_edge_does_not_block_direction_flip(db_session):
     _seed_config(
         db_session,
         paper_trade_amount=1000.0,
@@ -259,7 +259,7 @@ def test_min_same_day_exit_edge_blocks_tiny_profitable_flip(db_session):
         amount=1000.0,
         shares=10.0,
         entry_price=100.0,
-        entered_at=datetime.utcnow(),
+        entered_at=datetime.now(timezone.utc),
         analysis_request_id="prev",
     )
     db_session.add(open_trade)
@@ -300,21 +300,18 @@ def test_min_same_day_exit_edge_blocks_tiny_profitable_flip(db_session):
         paper_trading_module.market_status = original_market_status
         paper_trading_module.close_expired_positions = original_close_expired_positions
 
-    still_open = (
-        db_session.query(PaperTrade)
-        .filter(PaperTrade.id == open_trade.id, PaperTrade.exited_at.is_(None))
-        .first()
-    )
-    opposite_open = (
+    # Direction flip (LONG→SHORT) should bypass the same-day exit edge gate
+    closed_trade = db_session.query(PaperTrade).filter(PaperTrade.id == open_trade.id).first()
+    new_trade = (
         db_session.query(PaperTrade)
         .filter(PaperTrade.underlying == "USO", PaperTrade.id != open_trade.id, PaperTrade.exited_at.is_(None))
         .first()
     )
 
-    assert still_open is not None
-    assert opposite_open is None
-    assert actions[0]["action"] == "held"
-    assert actions[0]["reason"] == "min_same_day_exit_edge"
+    assert closed_trade is not None
+    assert closed_trade.exited_at is not None
+    assert new_trade is not None
+    assert actions[0]["action"] == "opened"
 
 
 def test_min_same_day_exit_edge_does_not_block_same_day_loss_cut(db_session):
@@ -333,7 +330,7 @@ def test_min_same_day_exit_edge_does_not_block_same_day_loss_cut(db_session):
         amount=1000.0,
         shares=10.0,
         entry_price=100.0,
-        entered_at=datetime.utcnow(),
+        entered_at=datetime.now(timezone.utc),
         analysis_request_id="prev",
     )
     db_session.add(open_trade)

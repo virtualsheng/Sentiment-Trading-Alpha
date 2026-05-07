@@ -5,7 +5,7 @@ Parses geopolitical news feeds for sentiment analysis
 
 import feedparser
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from bs4 import BeautifulSoup
@@ -194,13 +194,13 @@ class RSSFeedParser:
     def _parse_date(self, parsed_date: Optional[tuple]) -> datetime:
         """Parse date tuple to datetime object."""
         if parsed_date is None:
-            return datetime.utcnow()
+            return datetime.now(timezone.utc)
         
         try:
             dt = datetime(*parsed_date[:6])
             return dt
         except (TypeError, ValueError):
-            return datetime.utcnow()
+            return datetime.now(timezone.utc)
     
     def _extract_content_from_html(self, html: str) -> str:
         """Extract clean text from HTML content."""
@@ -348,7 +348,7 @@ class RSSFeedParser:
     def _parse_yahoo_date(self, date_str: str) -> datetime:
         """Parse ISO date string from Yahoo Finance."""
         if not date_str:
-            return datetime.utcnow()
+            return datetime.now(timezone.utc)
         
         try:
             # Remove 'Z' if present and parse
@@ -356,7 +356,7 @@ class RSSFeedParser:
             dt = datetime.fromisoformat(date_str)
             return dt
         except (ValueError, TypeError):
-            return datetime.utcnow()
+            return datetime.now(timezone.utc)
     
     def filter_by_keywords(
         self,
