@@ -89,7 +89,13 @@ class AlpacaBroker:
         return result if isinstance(result, list) else []
 
     def close_position(self, symbol: str) -> Dict[str, Any]:
-        return self._delete(f"/v2/positions/{symbol.upper()}")
+        symbol = symbol.upper()
+        r = httpx.delete(self._base + f"/v2/positions/{symbol}", headers=self._headers, timeout=10)
+        # If no position is open, treat as success (nothing to close)
+        if r.status_code == 404:
+            return {"message": f"No open position for {symbol}", "already_closed": True}
+        r.raise_for_status()
+        return r.json()
 
     def get_position(self, symbol: str) -> Dict[str, Any]:
         return self._get(f"/v2/positions/{symbol.upper()}")
@@ -145,8 +151,19 @@ class AlpacaBroker:
         if activity_type:
             path += f"/{activity_type}"
         path += f"?page_size={limit}"
-        result = self._get(path)
-        return result if isinstance(result, list) else []
+        try:
+            result = self._get(path)
+            return result if isinstance(result, list) else []
+        except Exception:
+            # Some Alpaca environments may reject page_size; try without it
+            alt_path = "/v2/account/activities"
+            if activity_type:
+                alt_path += f"/{activity_type}"
+            try:
+                result = self._get(alt_path)
+                return result if isinstance(result, list) else []
+            except Exception:
+                return []
 
     def _get(self, path: str) -> Any:
         r = httpx.get(self._base + path, headers=self._headers, timeout=10)
@@ -1208,6 +1225,17 @@ def poll_unfilled_orders(db) -> int:
                     pass
             order.raw_response = data
             updated += 1
+        except httpx.HTTPStatusError as exc:
+            oid = order.alpaca_order_id or order.client_order_id or order.id
+            if exc.response.status_code == 404:
+                # Order no longer exists on Alpaca — mark as cancelled to stop polling
+                order.status = "cancelled"
+                order.filled_at = datetime.now(timezone.utc)
+                db.commit()
+                updated += 1
+                print(f"[alpaca] poll: order {oid} recovered via 404, marked cancelled")
+            else:
+                print(f"[alpaca] poll: order {oid} error: {exc}")
         except Exception as exc:
             oid = order.alpaca_order_id or order.client_order_id or order.id
             print(f"[alpaca] poll: order {oid} error: {exc}")

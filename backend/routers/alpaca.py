@@ -394,3 +394,250 @@ async def get_account_activities(
         return activities
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ── Live summary (computed server-side from Alpaca API) ───────────────────────
+
+@router.get("/live-summary")
+async def get_alpaca_live_summary(
+    _admin: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Compute live trading summary from Alpaca's API.
+    Falls back to the alpaca_orders DB table when the Alpaca activities API is unavailable.
+    
+    Returns:
+      - account: account details (equity, cash, buying_power, unrealized_pl)
+      - positions: open positions with unrealized P&L
+      - realized_pnl: total realized P&L from completed round-trips
+      - win_count / loss_count / win_rate: computed from fill history or DB
+      - total_trades: number of completed round-trips
+      - closed_trades: list of completed round-trip details
+    """
+    broker = get_broker_from_keychain(mode="live")
+    if broker is None:
+        raise HTTPException(status_code=400, detail="Alpaca live API keys not configured")
+
+    def _to_float(val, default=0.0):
+        try:
+            return float(val) if val is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    try:
+        # 1. Fetch account
+        account = broker.get_account()
+        if not isinstance(account, dict):
+            account = {}
+
+        equity = _to_float(account.get("equity"))
+        cash = _to_float(account.get("cash"))
+        buying_power = _to_float(account.get("buying_power"))
+        unrealized_pl = _to_float(account.get("unrealized_pl"))
+        last_equity = _to_float(account.get("last_equity"))
+        daytrade_count = _to_float(account.get("daytrade_count"))
+        pattern_day_trader = str(account.get("pattern_day_trader", "")).lower() in {"true", "1", "yes"}
+        trading_blocked = str(account.get("trading_blocked", "")).lower() in {"true", "1", "yes"}
+    except Exception as exc:
+        print(f"[alpaca] live-summary: account fetch failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Cannot fetch Alpaca account: {exc}")
+
+    # 2. Fetch open positions
+    try:
+        positions = broker.get_positions()
+        if not isinstance(positions, list):
+            positions = []
+    except Exception as exc:
+        print(f"[alpaca] live-summary: positions fetch failed: {exc}")
+        positions = []
+
+    open_positions_list = []
+    computed_unrealized_pnl = 0.0
+    for pos in positions:
+        if not isinstance(pos, dict):
+            continue
+        qty = _to_float(pos.get("qty"))
+        if qty == 0:
+            continue
+        avg_entry = _to_float(pos.get("avg_entry_price"))
+        current = _to_float(pos.get("current_price"))
+        side = str(pos.get("side", "long")).lower()
+        # Compute unrealized P&L manually since Alpaca's account-level field may be stale
+        if avg_entry > 0 and current > 0 and qty > 0:
+            if side == "short":
+                pos_pnl = (avg_entry - current) * qty
+            else:
+                pos_pnl = (current - avg_entry) * qty
+        else:
+            pos_pnl = _to_float(pos.get("unrealized_pnl"))
+        computed_unrealized_pnl += pos_pnl
+        open_positions_list.append({
+            "symbol": pos.get("symbol", ""),
+            "qty": qty,
+            "avg_entry_price": avg_entry,
+            "current_price": current,
+            "market_value": _to_float(pos.get("market_value")),
+            "unrealized_pnl": round(pos_pnl, 4),
+            "unrealized_plpc": _to_float(pos.get("unrealized_plpc")),
+            "side": side,
+        })
+
+    # 3. Try to get fill activities from Alpaca API (authoritative source)
+    activities: list = []
+    try:
+        activities = broker.get_account_activities(activity_type="FILL", limit=500)
+        if not isinstance(activities, list):
+            activities = []
+    except Exception as exc:
+        print(f"[alpaca] live-summary: activities API failed, falling back to DB: {exc}")
+        activities = []
+
+    realized_pnl = 0.0
+    wins = 0
+    losses = 0
+    closed_trades_list = []
+
+    if activities:
+        # Compute realized P&L from fill activities (Alpaca API)
+        fills_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
+        for act in activities:
+            if not isinstance(act, dict):
+                continue
+            symbol = str(act.get("symbol", "") or "").upper().strip()
+            if not symbol:
+                continue
+            side = str(act.get("side", "") or "").lower().strip()
+            if side not in ("buy", "sell"):
+                continue
+            fills_by_symbol.setdefault(symbol, []).append({
+                "side": side,
+                "qty": _to_float(act.get("qty")),
+                "price": _to_float(act.get("price")),
+                "transaction_time": act.get("transaction_time", ""),
+            })
+
+        for symbol in fills_by_symbol:
+            fills_by_symbol[symbol].sort(key=lambda f: f["transaction_time"])
+
+        for symbol, fills in fills_by_symbol.items():
+            buys = [f for f in fills if f["side"] == "buy"]
+            sells = [f for f in fills if f["side"] == "sell"]
+
+            buy_idx = 0
+            sell_idx = 0
+            while buy_idx < len(buys) and sell_idx < len(sells):
+                buy = buys[buy_idx]
+                sell = sells[sell_idx]
+                matched_qty = min(buy["qty"], sell["qty"])
+                if matched_qty <= 0:
+                    if buy["qty"] <= 0:
+                        buy_idx += 1
+                    if sell["qty"] <= 0:
+                        sell_idx += 1
+                    continue
+
+                pnl = (sell["price"] - buy["price"]) * matched_qty
+                realized_pnl += pnl
+                if pnl > 0:
+                    wins += 1
+                else:
+                    losses += 1
+
+                closed_trades_list.append({
+                    "symbol": symbol,
+                    "buy_price": buy["price"],
+                    "sell_price": sell["price"],
+                    "qty": matched_qty,
+                    "pnl": round(pnl, 4),
+                    "closed_at": sell["transaction_time"],
+                })
+
+                buys[buy_idx]["qty"] -= matched_qty
+                sells[sell_idx]["qty"] -= matched_qty
+
+                if buys[buy_idx]["qty"] <= 0:
+                    buy_idx += 1
+                if sells[sell_idx]["qty"] <= 0:
+                    sell_idx += 1
+    else:
+        # Fallback: compute realized P&L from alpaca_orders table
+        try:
+            from database.models import AlpacaOrder
+            from datetime import timezone
+
+            live_orders = (
+                db.query(AlpacaOrder)
+                .filter(
+                    AlpacaOrder.trading_mode == "live",
+                    AlpacaOrder.status == "filled",
+                    AlpacaOrder.filled_avg_price.isnot(None),
+                    AlpacaOrder.filled_qty.isnot(None),
+                )
+                .all()
+            )
+
+            by_trade: Dict[int, List] = {}
+            for o in live_orders:
+                ptid = o.paper_trade_id
+                if ptid is None:
+                    continue
+                by_trade.setdefault(ptid, []).append(o)
+
+            _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+            for trade_orders in by_trade.values():
+                buys = [o for o in trade_orders if o.side == "buy"]
+                sells = [o for o in trade_orders if o.side == "sell"]
+                if not buys or not sells:
+                    continue
+                buy = max(buys, key=lambda o: o.filled_at or _epoch)
+                sell = max(sells, key=lambda o: o.filled_at or _epoch)
+                if not buy.filled_avg_price or not sell.filled_avg_price:
+                    continue
+                qty = min(_to_float(buy.filled_qty), _to_float(sell.filled_qty))
+                if qty <= 0:
+                    continue
+                pnl = (float(sell.filled_avg_price) - float(buy.filled_avg_price)) * qty
+                realized_pnl += pnl
+                if pnl > 0:
+                    wins += 1
+                else:
+                    losses += 1
+                closed_at_str = sell.filled_at.isoformat() if sell.filled_at else ""
+                closed_trades_list.append({
+                    "symbol": buy.symbol,
+                    "buy_price": float(buy.filled_avg_price),
+                    "sell_price": float(sell.filled_avg_price),
+                    "qty": qty,
+                    "pnl": round(pnl, 4),
+                    "closed_at": closed_at_str,
+                })
+        except Exception as exc:
+            print(f"[alpaca] live-summary: DB fallback failed: {exc}")
+
+    total_trades = wins + losses
+    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+
+    # Sort closed trades newest first
+    closed_trades_list.sort(key=lambda t: t["closed_at"], reverse=True)
+
+    return {
+        "account": {
+            "equity": equity,
+            "cash": cash,
+            "buying_power": buying_power,
+            "unrealized_pl": unrealized_pl,
+            "last_equity": last_equity,
+            "daytrade_count": daytrade_count,
+            "pattern_day_trader": pattern_day_trader,
+            "trading_blocked": trading_blocked,
+        },
+        "positions": open_positions_list,
+        "realized_pnl": round(realized_pnl, 4),
+        "unrealized_pnl": round(computed_unrealized_pnl, 4),
+        "win_count": wins,
+        "loss_count": losses,
+        "win_rate": round(win_rate, 1),
+        "total_trades": total_trades,
+        "closed_trades": closed_trades_list,
+    }

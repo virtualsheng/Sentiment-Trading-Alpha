@@ -442,6 +442,7 @@ export default function TradingPage() {
     const [alpacaLivePositions, setAlpacaLivePositions] = useState<AlpacaPosition[]>([]);
     const [preferredTrack, setPreferredTrack] = useState<TradingTrack>("strategy_paper");
     const [livePrices, setLivePrices] = useState<Record<string, any>>({});
+    const [liveSummary, setLiveSummary] = useState<any>(null);
 
     const load = useCallback(async () => {
         try {
@@ -459,7 +460,7 @@ export default function TradingPage() {
 
     const loadAlpaca = useCallback(async () => {
         try {
-            const [statusRes, ordersRes, paperAccountRes, liveAccountRes, paperHistoryRes, liveHistoryRes, livePositionsRes] = await Promise.all([
+            const [statusRes, ordersRes, paperAccountRes, liveAccountRes, paperHistoryRes, liveHistoryRes, livePositionsRes, liveSummaryRes] = await Promise.all([
                 fetch("/api/alpaca/status", { cache: "no-store" }),
                 fetch("/api/alpaca/orders?limit=50", { cache: "no-store" }),
                 fetch("/api/alpaca/account?mode=paper", { cache: "no-store" }),
@@ -467,6 +468,7 @@ export default function TradingPage() {
                 fetch("/api/alpaca/portfolio-history?mode=paper&period=1M&timeframe=1D", { cache: "no-store" }),
                 fetch("/api/alpaca/portfolio-history?mode=live&period=1M&timeframe=1D", { cache: "no-store" }),
                 fetch("/api/alpaca/positions?mode=live", { cache: "no-store" }),
+                fetch("/api/alpaca/live-summary", { cache: "no-store" }),
             ]);
             if (statusRes.ok) {
                 const s = await statusRes.json();
@@ -494,6 +496,10 @@ export default function TradingPage() {
 
             if (livePositionsRes.ok) {
                 setAlpacaLivePositions(await livePositionsRes.json());
+            }
+
+            if (liveSummaryRes.ok) {
+                setLiveSummary(await liveSummaryRes.json());
             }
         } catch { /* silent — Alpaca may not be configured */ }
     }, []);
@@ -641,6 +647,15 @@ export default function TradingPage() {
     };
 
     const s = data?.summary;
+    // Derive open P&L from live prices (same source as the position rows) so it doesn't rely on the backend PriceClient.
+    const derivedOpenPnl = (() => {
+        if (!data?.open_positions || data.open_positions.length === 0) return 0;
+        return data.open_positions.reduce((acc, pos) => {
+            const livePrice = livePrices[pos.execution_ticker]?.price;
+            const { pnl } = calculateUnrealizedPnl(pos, livePrice);
+            return acc + pnl;
+        }, 0);
+    })();
     const brokerModes: BrokerMode[] = ["paper", "live"];
     const configuredBrokerModes = brokerModes.filter((mode) => alpacaStatus?.secrets?.[mode]?.configured);
     const brokerOrderCounts = brokerModes.reduce((acc, mode) => {
@@ -690,58 +705,26 @@ export default function TradingPage() {
                 ? "This account is below $25k, so same-day round trips need to stay limited."
                 : "Equity is above the standard PDT threshold or the account is not currently at risk.";
 
-    const liveFilled = alpacaOrders.filter(
-        (o) => o.trading_mode === "live" && o.status === "filled" && o.paper_trade_id != null,
-    );
-    const liveByTrade = new Map<number, AlpacaOrder[]>();
-    for (const o of liveFilled) {
-        const key = o.paper_trade_id!;
-        if (!liveByTrade.has(key)) liveByTrade.set(key, []);
-        liveByTrade.get(key)!.push(o);
-    }
-
-    type LiveOpenRow = { symbol: string; side: string; fillPrice: number; qty: number; openedAt: string | null };
-    type LiveClosedRow = { symbol: string; buyPrice: number; sellPrice: number; qty: number; pnl: number; closedAt: string | null };
-    const liveOpenRows: LiveOpenRow[] = [];
-    const liveClosedRows: LiveClosedRow[] = [];
-    let liveWins = 0, liveLosses = 0, liveRealized = 0;
-
-    for (const orders of Array.from(liveByTrade.values())) {
-        const buys = orders.filter((o) => o.side === "buy");
-        const sells = orders.filter((o) => o.side === "sell");
-        const sym = orders[0]?.symbol ?? "?";
-
-        if (!buys.length || !sells.length) {
-            // Only one side filled — position is still open
-            const openOrder = (buys.length ? buys : sells).reduce((a, b) =>
-                (a.filled_at ?? "") > (b.filled_at ?? "") ? a : b,
-            );
-            if (openOrder.filled_avg_price && openOrder.filled_qty) {
-                liveOpenRows.push({
-                    symbol: sym,
-                    side: openOrder.side,
-                    fillPrice: openOrder.filled_avg_price,
-                    qty: openOrder.filled_qty,
-                    openedAt: openOrder.filled_at,
-                });
-            }
-            continue;
-        }
-
-        const buy = buys.reduce((a, b) => (a.filled_at ?? "") > (b.filled_at ?? "") ? a : b);
-        const sell = sells.reduce((a, b) => (a.filled_at ?? "") > (b.filled_at ?? "") ? a : b);
-        if (!buy.filled_avg_price || !sell.filled_avg_price) continue;
-        const qty = Math.min(buy.filled_qty ?? 0, sell.filled_qty ?? 0);
-        const pnl = (sell.filled_avg_price - buy.filled_avg_price) * qty;
-        liveRealized += pnl;
-        if (pnl > 0) liveWins++; else liveLosses++;
-        const closedAt = [buy.filled_at, sell.filled_at].filter(Boolean).sort().pop() ?? null;
-        liveClosedRows.push({ symbol: sym, buyPrice: buy.filled_avg_price, sellPrice: sell.filled_avg_price, qty, pnl, closedAt });
-    }
-    liveClosedRows.sort((a, b) => (b.closedAt ?? "") > (a.closedAt ?? "") ? 1 : -1);
-
-    const liveTotalTrades = liveWins + liveLosses;
-    const liveWinRate = liveTotalTrades > 0 ? (liveWins / liveTotalTrades) * 100 : null;
+    // ── Live summary: prefer server-computed data, fall back to client-side ──
+    const liveSummaryData = liveSummary;
+    const liveWins = liveSummaryData?.win_count ?? 0;
+    const liveLosses = liveSummaryData?.loss_count ?? 0;
+    const liveRealized = liveSummaryData?.realized_pnl ?? 0;
+    const liveTotalTrades = liveSummaryData?.total_trades ?? 0;
+    const liveWinRate = liveSummaryData?.win_rate ?? null;
+    // Use computed unrealized P&L from the summary (summed from individual positions)
+    const liveUnrealizedPnlFromSummary = liveSummaryData?.unrealized_pnl;
+    const liveUnrealizedPnlForDisplay = liveUnrealizedPnlFromSummary != null ? liveUnrealizedPnlFromSummary : liveUnrealizedPnl;
+    const liveClosedRows: Array<{ symbol: string; buyPrice: number; sellPrice: number; qty: number; pnl: number; closedAt: string | null }> =
+        (liveSummaryData?.closed_trades ?? []).map((t: any) => ({
+            symbol: t.symbol,
+            buyPrice: t.buy_price,
+            sellPrice: t.sell_price,
+            qty: t.qty,
+            pnl: t.pnl,
+            closedAt: t.closed_at,
+        }));
+    const liveOpenRows: Array<{ symbol: string; side: string; fillPrice: number; qty: number; openedAt: string | null }> = [];
 
     const availableTracks: TradingTrack[] = [
         "strategy_paper",
@@ -865,9 +848,9 @@ export default function TradingPage() {
                                     <StatCard label="Equity" value={liveEquity != null ? fmtMoney(liveEquity) : "—"} />
                                     <StatCard
                                         label="Unrealized P&L"
-                                        value={liveUnrealizedPnl != null ? fmtDollar(liveUnrealizedPnl) : "—"}
+                                        value={liveUnrealizedPnlForDisplay != null ? fmtDollar(liveUnrealizedPnlForDisplay) : "—"}
                                         sub="open positions"
-                                        color={liveUnrealizedPnl != null ? pnlColor(liveUnrealizedPnl) : undefined}
+                                        color={liveUnrealizedPnlForDisplay != null ? pnlColor(liveUnrealizedPnlForDisplay) : undefined}
                                     />
                                     <StatCard
                                         label="Realized P&L"
@@ -1058,9 +1041,9 @@ export default function TradingPage() {
                                     />
                                     <StatCard
                                         label="Open P&L"
-                                        value={fmtDollar(s!.open_pnl)}
+                                        value={fmtDollar(derivedOpenPnl)}
                                         sub={`${s!.open_positions} open positions`}
-                                        color={pnlColor(s!.open_pnl)}
+                                        color={pnlColor(derivedOpenPnl)}
                                     />
                                     <StatCard
                                         label="Win Rate"
@@ -1154,7 +1137,7 @@ export default function TradingPage() {
                                         <StatCard label="Net P&L" value={fmtDollar(s!.total_pnl)} sub={`${fmt(s!.total_pnl_pct)}% of deployed`} color={pnlColor(s!.total_pnl)} />
                                         <StatCard label="Realized" value={fmtDollar(s!.realized_pnl)} sub={`${s!.closed_trades} closed`} color={pnlColor(s!.realized_pnl)} />
                                         <StatCard label="Win Rate" value={`${s!.win_rate.toFixed(0)}%`} sub={`${s!.win_count}W / ${s!.loss_count}L`} color={s!.win_rate >= 50 ? "text-emerald-400" : "text-red-400"} />
-                                        <StatCard label="Open P&L" value={fmtDollar(s!.open_pnl)} sub={`${s!.open_positions} open`} color={pnlColor(s!.open_pnl)} />
+                                        <StatCard label="Open P&L" value={fmtDollar(derivedOpenPnl)} sub={`${s!.open_positions} open`} color={pnlColor(derivedOpenPnl)} />
                                     </div>
                                     <div className="rounded-xl p-5 border border-white/8" style={{ background: "rgba(30,41,59,0.7)" }}>
                                         <div className="flex items-center gap-2 mb-4">
