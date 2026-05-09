@@ -471,19 +471,21 @@ class SentimentEngine:
         _ss = _L["sentiment_scoring"]
 
         # ── Bluster score: −1 (pure rhetoric) → +1 (pure substance) ──────────
-        bluster_weight = float(_ss.get("bluster_phrase_weight", 1.25))
-        substance_weight = float(_ss.get("substance_phrase_weight", 1.0))
-        mixed_floor = float(_ss.get("mixed_signal_bluster_floor", -0.15))
-        weighted_sub = n_sub * substance_weight
-        weighted_blu = n_blu * bluster_weight
-        total = weighted_sub + weighted_blu
-        raw_bluster = (weighted_sub - weighted_blu) / total if total else 0.0
-        # If the text contains both rhetoric and substance, keep a modest negative bluster
-        # score instead of collapsing to perfect neutrality.
-        if n_blu > 0 and n_sub > 0:
-            raw_bluster = min(raw_bluster, mixed_floor)
+        # Uses a linear net-count formula instead of a ratio to produce a smooth
+        # gradient rather than binary extremes. Each bluster phrase subtracts,
+        # each substance phrase adds, scaled by per_item_weight.
+        #   n_sub=0, n_blu=0 →  0.0  (−0.15 unconfirmed)
+        #   n_sub=1, n_blu=0 → +0.33 (+0.18 unconfirmed)
+        #   n_sub=2, n_blu=0 → +0.66 (+0.51 unconfirmed)
+        #   n_sub=3, n_blu=0 → +1.0
+        #   n_sub=0, n_blu=1 → −0.33 (−0.48 unconfirmed)
+        per_item_weight = float(_ss.get("bluster_per_item_weight", 0.33))
+        raw_bluster = (n_sub - n_blu) * per_item_weight
+        # Mixed-signal articles should pull toward neutral, not auto-negative.
+        # The old ratio formula needed a mixed_signal_floor to compensate for
+        # its binary behavior — now handled naturally by the linear formula.
         if not confirmed:
-            raw_bluster = max(-1.0, raw_bluster - _ss["unconfirmed_bluster_penalty"])
+            raw_bluster -= _ss["unconfirmed_bluster_penalty"]
         bluster_score = round(max(-1.0, min(1.0, raw_bluster)), 3)
 
         # ── Policy score: 0 (irrelevant noise) → 1 (major confirmed policy) ──

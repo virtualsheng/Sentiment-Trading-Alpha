@@ -15,7 +15,7 @@ Usage:
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -35,7 +35,8 @@ def load_recent_scores(
         - timestamp: datetime
         - scores: dict[symbol] -> {market_bluster, policy_change, confidence}
     """
-    cutoff = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=max_age_hours)
     recent = (
         db.query(AnalysisResult)
         .filter(AnalysisResult.timestamp >= cutoff)
