@@ -266,6 +266,7 @@ class PipelineService:
                     openai_model=getattr(config, "openai_model", None),
                     ollama_url=getattr(config, "ollama_url", None),
                     vllm_url=getattr(config, "vllm_url", None),
+                    cloud_provider=getattr(config, "cloud_provider", None),
                 ),
                 timeout=stage2_timeout_seconds,
             )

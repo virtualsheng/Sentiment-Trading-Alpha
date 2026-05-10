@@ -34,6 +34,10 @@ from services.secret_store import (
     save_openai_api_key,
     clear_openai_api_key,
     get_openai_api_key,
+    get_cloud_secret_status,
+    save_cloud_api_key,
+    clear_cloud_api_key,
+    get_cloud_api_key,
 )
 from services.openai_client import get_openai_status
 from services.telegram_bot import verify_remote_control
@@ -68,6 +72,11 @@ def _fetch_models_from_backends(config, override_base_url: Optional[str] = None)
         return str(getattr(config, "openai_base_url", "https://api.openai.com/v1") or "https://api.openai.com/v1")
 
     api_key = get_openai_api_key()
+    # Also try provider-specific key if the DB has a cloud_provider set
+    cloud_provider = str(getattr(config, "cloud_provider", "") or "").strip().lower()
+    if not api_key and cloud_provider and cloud_provider != "openai":
+        from services.secret_store import get_cloud_api_key
+        api_key = get_cloud_api_key(cloud_provider)
     if api_key:
         try:
             from services.openai_client import get_openai_status
@@ -408,28 +417,42 @@ async def delete_remote_snapshot_secrets(
         raise HTTPException(status_code=503, detail=str(exc))
 
 
-# ── OpenAI / OpenAI-compatible Cloud LLM Secrets ─────────────────────────
+# ── Cloud LLM Secrets (per-provider) ──────────────────────────────
 
 
 @router.get("/admin/openai-secrets", tags=["Admin"])
 async def get_openai_secrets(
+    request: Request,
     _admin: None = Depends(require_admin_token),
 ) -> Dict[str, Any]:
-    """Return masked status of the OpenAI API key in the OS keychain."""
-    return get_openai_secret_status()
+    """Return masked status of a cloud provider's API key.
+
+    Query params:
+      - provider: cloud provider name (openai, anthropic, openrouter, google, custom).
+        Defaults to "openai" for backward compatibility.
+    """
+    provider = request.query_params.get("provider", "openai")
+    return get_cloud_secret_status(provider)
 
 
 @router.put("/admin/openai-secrets", tags=["Admin"])
 async def put_openai_secrets(
     payload: Dict[str, Any],
+    request: Request,
     _admin: None = Depends(require_admin_token),
 ) -> Dict[str, Any]:
-    """Store the OpenAI API key in the OS keychain."""
+    """Store a cloud provider's API key in the OS keychain.
+
+    Query params:
+      - provider: cloud provider name. Defaults to "openai".
+    Body: {"api_key": "sk-..."}
+    """
     try:
+        provider = request.query_params.get("provider", "openai") if hasattr(request, 'query_params') else "openai"
         api_key = str(payload.get("api_key") or "")
         if not api_key:
-            raise ValueError("OpenAI API key is required")
-        return save_openai_api_key(api_key)
+            raise ValueError(f"API key is required for {provider}")
+        return save_cloud_api_key(provider, api_key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -438,11 +461,17 @@ async def put_openai_secrets(
 
 @router.delete("/admin/openai-secrets", tags=["Admin"])
 async def delete_openai_secrets(
+    request: Request,
     _admin: None = Depends(require_admin_token),
 ) -> Dict[str, Any]:
-    """Remove the OpenAI API key from the OS keychain."""
+    """Remove a cloud provider's API key from the OS keychain.
+
+    Query params:
+      - provider: cloud provider name. Defaults to "openai".
+    """
     try:
-        return clear_openai_api_key()
+        provider = request.query_params.get("provider", "openai")
+        return clear_cloud_api_key(provider)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -462,7 +491,8 @@ async def test_openai_connection(
     to the saved OS keychain key and the DB-stored base URL.
     """
     config = get_or_create_app_config(db)
-    api_key = str(payload.get("api_key") or "").strip() or get_openai_api_key()
+    provider = str(payload.get("provider") or config.cloud_provider or "openai")
+    api_key = str(payload.get("api_key") or "").strip() or get_cloud_api_key(provider)
     base_url = str(payload.get("base_url") or "").strip() or str(getattr(config, "openai_base_url", "https://api.openai.com/v1") or "https://api.openai.com/v1")
     timeout = min(int(payload.get("timeout", 8)), 15)
 

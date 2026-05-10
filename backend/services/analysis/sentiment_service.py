@@ -64,6 +64,7 @@ class SentimentService:
         openai_model: Optional[str] = None,
         ollama_url: Optional[str] = None,
         vllm_url: Optional[str] = None,
+        cloud_provider: Optional[str] = None,
         *,
         on_symbol_complete: Optional[Callable[[str, int, int, str, float], AwaitableType[None]]] = None,
     ) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
@@ -85,6 +86,8 @@ class SentimentService:
             engine_overrides["openai_base_url"] = openai_base_url
         if openai_model:
             engine_overrides["openai_model"] = openai_model
+        if cloud_provider:
+            engine_overrides["cloud_provider"] = cloud_provider
         engine = SentimentEngine(
             model_name=model_name,
             overrides=engine_overrides if engine_overrides else None,

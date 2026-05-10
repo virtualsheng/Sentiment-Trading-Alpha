@@ -253,7 +253,8 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
     // ── Fetch secret status on mount ──────────────────────────────────
     const fetchSecrets = useCallback(async () => {
         try {
-            const res = await fetch("/api/admin/openai-secrets", { cache: "no-store" });
+            const providerParam = config.api_mode === "cloud" && currentProvider !== "custom" ? `?provider=${currentProvider}` : "";
+            const res = await fetch(`/api/admin/openai-secrets${providerParam}`, { cache: "no-store" });
             const payload = await res.json().catch(() => ({}));
             if (!res.ok) {
                 setSecrets((s) => ({ ...s, available: false, configured: false, error: payload?.error || "Failed to load" }));
@@ -268,8 +269,9 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
         } catch {
             setSecrets((s) => ({ ...s, available: false, configured: false, error: "Network error" }));
         }
-    }, []);
+    }, [config.api_mode, currentProvider]);
 
+    // ── Re-fetch secrets when provider changes in cloud mode ──────────
     useEffect(() => { void fetchSecrets(); }, [fetchSecrets]);
 
     // Auto-fetch cloud models when cloud mode is active, secrets are configured, and models not yet loaded
@@ -288,7 +290,8 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
         setIsSaving(true);
         setStatus("");
         try {
-            const res = await fetch("/api/admin/openai-secrets", {
+            const providerParam = currentProvider !== "custom" ? `?provider=${currentProvider}` : "";
+            const res = await fetch(`/api/admin/openai-secrets${providerParam}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ api_key: apiKeyInput.trim() }),
@@ -305,7 +308,7 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
                 error: String(payload.error || ""),
             });
             setApiKeyInput("");
-            setStatus("API key saved to OS keychain.");
+            setStatus(`API key saved for ${currentProvider}.`);
             void fetchCloudModels();
         } catch {
             setStatus("Failed to save API key");
@@ -319,7 +322,8 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
         setIsSaving(true);
         setStatus("");
         try {
-            const res = await fetch("/api/admin/openai-secrets", { method: "DELETE" });
+            const providerParam = currentProvider !== "custom" ? `?provider=${currentProvider}` : "";
+            const res = await fetch(`/api/admin/openai-secrets${providerParam}`, { method: "DELETE" });
             const payload = await res.json().catch(() => ({}));
             if (!res.ok) {
                 setStatus(payload?.error || "Failed to clear");
@@ -675,6 +679,7 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
                                             body: JSON.stringify({
                                                 api_key: apiKeyInput || undefined,
                                                 base_url: config.api_url || undefined,
+                                                provider: currentProvider !== "custom" ? currentProvider : undefined,
                                             }),
                                         });
                                         const data = await res.json();

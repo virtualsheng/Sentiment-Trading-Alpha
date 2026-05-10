@@ -12,9 +12,15 @@ function backendHeaders(init?: HeadersInit): Headers {
     return headers;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
     try {
-        const response = await fetch(`${getBackendApiUrl()}/api/v1/admin/openai-secrets`, {
+        const url = new URL(request.url);
+        const provider = url.searchParams.get("provider");
+        let backendUrl = `${getBackendApiUrl()}/api/v1/admin/openai-secrets`;
+        if (provider) {
+            backendUrl += `?provider=${encodeURIComponent(provider)}`;
+        }
+        const response = await fetch(backendUrl, {
             cache: "no-store",
             headers: backendHeaders(),
         });
@@ -23,14 +29,20 @@ export async function GET() {
         }
         return NextResponse.json(await response.json());
     } catch {
-        return NextResponse.json({ error: "Failed to load OpenAI secret status" }, { status: 503 });
+        return NextResponse.json({ error: "Failed to load cloud API key status" }, { status: 503 });
     }
 }
 
 export async function PUT(request: NextRequest) {
     try {
         const body = await request.json();
-        const response = await fetch(`${getBackendApiUrl()}/api/v1/admin/openai-secrets`, {
+        const url = new URL(request.url);
+        const provider = url.searchParams.get("provider");
+        let backendUrl = `${getBackendApiUrl()}/api/v1/admin/openai-secrets`;
+        if (provider) {
+            backendUrl += `?provider=${encodeURIComponent(provider)}`;
+        }
+        const response = await fetch(backendUrl, {
             method: "PUT",
             headers: backendHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify(body),
@@ -41,13 +53,19 @@ export async function PUT(request: NextRequest) {
         }
         return NextResponse.json(await response.json());
     } catch {
-        return NextResponse.json({ error: "Failed to save OpenAI API key" }, { status: 503 });
+        return NextResponse.json({ error: "Failed to save API key" }, { status: 503 });
     }
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
     try {
-        const response = await fetch(`${getBackendApiUrl()}/api/v1/admin/openai-secrets`, {
+        const url = new URL(request.url);
+        const provider = url.searchParams.get("provider");
+        let backendUrl = `${getBackendApiUrl()}/api/v1/admin/openai-secrets`;
+        if (provider) {
+            backendUrl += `?provider=${encodeURIComponent(provider)}`;
+        }
+        const response = await fetch(backendUrl, {
             method: "DELETE",
             headers: backendHeaders(),
         });
@@ -56,6 +74,6 @@ export async function DELETE() {
         }
         return NextResponse.json(await response.json());
     } catch {
-        return NextResponse.json({ error: "Failed to clear OpenAI API key" }, { status: 503 });
+        return NextResponse.json({ error: "Failed to clear API key" }, { status: 503 });
     }
 }

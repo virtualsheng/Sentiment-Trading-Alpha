@@ -24,8 +24,29 @@ ALPACA_API_KEY_KEY    = "alpaca_api_key"
 ALPACA_SECRET_KEY_KEY = "alpaca_secret_key"
 ALPACA_MODE_KEY       = "alpaca_trading_mode"   # "paper" | "live"
 
-# OpenAI / OpenAI-compatible cloud LLM
+# ── Cloud LLM API keys (per-provider) ─────────────────────────────────
+# Multiple providers supported: each stores its own key in the OS keychain.
+# "openai" is the legacy slot; new providers use their own slots.
+CLOUD_API_KEY_KEYS: Dict[str, str] = {
+    "openai":    "openai_api_key",
+    "anthropic": "anthropic_api_key",
+    "openrouter":"openrouter_api_key",
+    "google":    "google_api_key",
+    "custom":    "custom_api_key",
+}
+
+# Legacy constant for backward compatibility — new code should use
+# get_cloud_api_key(provider) / save_cloud_api_key(provider, key) instead.
 OPENAI_API_KEY_KEY = "openai_api_key"
+
+# Valid cloud provider identifiers
+VALID_CLOUD_PROVIDERS = {"openai", "anthropic", "openrouter", "google", "custom"}
+
+
+def _resolve_cloud_key_name(provider: str) -> str:
+    """Return the OS keychain key name for a cloud provider."""
+    p = str(provider or "").strip().lower()
+    return CLOUD_API_KEY_KEYS.get(p, OPENAI_API_KEY_KEY)
 
 
 def _get_keyring_module():
@@ -235,12 +256,23 @@ def get_alpaca_credentials() -> Dict[str, str]:
     return get_alpaca_credentials_for_mode("paper")
 
 
-# ── OpenAI / OpenAI-compatible Cloud LLM ──────────────────────────────────────
+# ── Cloud LLM API keys (per-provider) ──────────────────────────────────
 
-def get_openai_secret_status() -> Dict[str, Any]:
-    """Return masked status of the OpenAI API key in the OS keychain."""
+
+def get_cloud_api_key(provider: str) -> str:
+    """Return the raw API key for a cloud provider from the OS keychain.
+
+    Falls back to the legacy single-slot openai_api_key for the "openai" provider.
+    Returns empty string if no key is stored.
+    """
+    key_name = _resolve_cloud_key_name(provider)
+    return _read_secret(key_name)
+
+
+def get_cloud_secret_status(provider: str) -> Dict[str, Any]:
+    """Return masked status of a cloud provider's API key."""
     try:
-        api_key = _read_secret(OPENAI_API_KEY_KEY)
+        api_key = get_cloud_api_key(provider)
         return {
             "available": True,
             "configured": bool(api_key),
@@ -256,21 +288,41 @@ def get_openai_secret_status() -> Dict[str, Any]:
         }
 
 
-def save_openai_api_key(api_key: str) -> Dict[str, Any]:
-    """Store the OpenAI API key in the OS keychain."""
+def save_cloud_api_key(provider: str, api_key: str) -> Dict[str, Any]:
+    """Store a cloud provider's API key in the OS keychain."""
     key = str(api_key or "").strip()
     if not key:
-        raise ValueError("OpenAI API key is required")
-    _write_secret(OPENAI_API_KEY_KEY, key)
-    return get_openai_secret_status()
+        raise ValueError(f"API key is required for {provider}")
+    key_name = _resolve_cloud_key_name(provider)
+    _write_secret(key_name, key)
+    return get_cloud_secret_status(provider)
+
+
+def clear_cloud_api_key(provider: str) -> Dict[str, Any]:
+    """Remove a cloud provider's API key from the OS keychain."""
+    key_name = _resolve_cloud_key_name(provider)
+    _delete_secret(key_name)
+    return get_cloud_secret_status(provider)
+
+
+# ── Legacy OpenAI-only convenience wrappers ───────────────────────────
+
+
+def get_openai_secret_status() -> Dict[str, Any]:
+    """Legacy: call get_cloud_secret_status('openai') instead."""
+    return get_cloud_secret_status("openai")
+
+
+def save_openai_api_key(api_key: str) -> Dict[str, Any]:
+    """Legacy: call save_cloud_api_key('openai', api_key) instead."""
+    return save_cloud_api_key("openai", api_key)
 
 
 def clear_openai_api_key() -> Dict[str, Any]:
-    """Remove the OpenAI API key from the OS keychain."""
-    _delete_secret(OPENAI_API_KEY_KEY)
-    return get_openai_secret_status()
+    """Legacy: call clear_cloud_api_key('openai') instead."""
+    return clear_cloud_api_key("openai")
 
 
 def get_openai_api_key() -> str:
-    """Return the raw OpenAI API key from the OS keychain, or empty string."""
-    return _read_secret(OPENAI_API_KEY_KEY)
+    """Legacy: call get_cloud_api_key('openai') instead."""
+    return get_cloud_api_key("openai")

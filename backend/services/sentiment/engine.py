@@ -232,16 +232,18 @@ class SentimentEngine:
         # OpenAI settings: DB override → env var → default
         openai_base_url = (opts.get("openai_base_url") or "").strip()
         openai_model = (opts.get("openai_model") or "").strip()
-        openai_api_key = ""
-        if not openai_api_key:
-            try:
-                from services.secret_store import get_openai_api_key
-                openai_api_key = get_openai_api_key()
-            except Exception:
-                pass
+        cloud_provider = (opts.get("cloud_provider") or "").strip().lower() or "openai"
         self.OPENAI_BASE_URL = openai_base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
         self.OPENAI_MODEL = openai_model or os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
-        self.OPENAI_API_KEY = openai_api_key or os.getenv("OPENAI_API_KEY", "").strip()
+        # Only read cloud API key when using the OpenAI-compatible (cloud) backend.
+        # Local inference (ollama/vllm) never needs a cloud API key.
+        self.OPENAI_API_KEY = ""
+        if self.INFERENCE_BACKEND == "openai":
+            try:
+                from services.secret_store import get_cloud_api_key
+                self.OPENAI_API_KEY = get_cloud_api_key(cloud_provider) or os.getenv("OPENAI_API_KEY", "").strip()
+            except Exception:
+                self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 
         self.model_name = (model_name or self.MODEL_NAME or "").strip()
         self.session = requests.Session()
@@ -1412,14 +1414,12 @@ class SentimentEngine:
         """
         from services.openai_client import call_openai_chat_sync
 
-        # Resolve API key: try secret store first, then env var
+        # Resolve API key: from instance var (set at init time) or env var.
+        # In local mode (ollama/vllm) self.OPENAI_API_KEY is empty, so we
+        # never fall through to calling get_cloud_api_key() or env var.
         api_key = self.OPENAI_API_KEY
-        if not api_key:
-            try:
-                from services.secret_store import get_openai_api_key
-                api_key = get_openai_api_key()
-            except Exception:
-                api_key = ""
+        if not api_key and self.INFERENCE_BACKEND == "openai":
+            api_key = os.getenv("OPENAI_API_KEY", "").strip()
 
         effective_model = (model_override or self.OPENAI_MODEL or "").strip()
         effective_base_url = (self.OPENAI_BASE_URL or "https://api.openai.com/v1").strip()
