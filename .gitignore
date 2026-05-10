@@ -11,6 +11,9 @@ pytest-cache-files-*/
 trading_system.db
 trading_system.db-shm
 trading_system.db-wal
+decision_log.db
+decision_log.db-shm
+decision_log.db-wal
 backend/trading_system.db
 backend/trading_system.db-shm
 backend/trading_system.db-wal

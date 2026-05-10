@@ -330,6 +330,12 @@ def migrate():
                     conn.exec_driver_sql(f"ALTER TABLE alpaca_orders ADD COLUMN {column_name} {column_type} NOT NULL DEFAULT {default_value}")
                     conn.commit()
 
+    # ── Decision Log tables ──────────────────────────────────────────────
+    # Created via metadata.create_all on the decision_log engine during
+    # backend startup.  No manual migration steps needed — the tables are
+    # managed by the DecisionLogBase declarative base and are created
+    # automatically when the backend starts (see decision_logger.py).
+
 
 if __name__ == "__main__":
     try:

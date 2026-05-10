@@ -581,6 +581,42 @@ def process_signals(
                     action_summary["action"] = "trailing"
                     action_summary["reason"] = "hold_signal_trailing_stop"
                     action_summary["trailing_stop_price"] = new_stop
+
+                    # ── Decision Log: trailing stop event ──────────────────
+                    try:
+                        from database.engine import DecisionLogSessionLocal
+                        from database.models import DecisionLogTrade
+                        from services.decision_logger import logger as _dl2
+                        _ddb2 = DecisionLogSessionLocal()
+                        try:
+                            _tl2 = _ddb2.query(DecisionLogTrade).filter(
+                                DecisionLogTrade.paper_trade_id == open_pos.id
+                            ).first()
+                            if _tl2:
+                                _dl2.log_trade_event(
+                                    _ddb2,
+                                    trade_log_id=_tl2.id,
+                                    event_type="trailing_stop_set",
+                                    run_id=request_id if 'request_id' in dir() else None,
+                                    keep_vs_close="hold_with_trailing_stop",
+                                    decision_reason=(
+                                        f"HOLD signal, trailing stop set: best={best:.2f}, "
+                                        f"stop={new_stop:.2f}, tighten={_tight_pct:.4f}"
+                                    ),
+                                    event_details={
+                                        "best_price_seen": best,
+                                        "trailing_stop_price": new_stop,
+                                        "tighten_factor_pct": _tight_pct,
+                                        "current_price": current_px,
+                                    },
+                                )
+                                _ddb2.commit()
+                        except Exception as _dlx2:
+                            _ddb2.rollback()
+                        finally:
+                            _ddb2.close()
+                    except Exception:
+                        pass
                 else:
                     action_summary["action"] = "held"
                     action_summary["reason"] = "hold_signal_no_price"
@@ -777,6 +813,58 @@ def process_signals(
                 holding_window_until=window_until,
             )
             db.add(new_trade)
+            db.flush()  # get new_trade.id
+
+            # ── Decision Log: trade entry ───────────────────────────────
+            try:
+                from database.engine import DecisionLogSessionLocal
+                from services.decision_logger import logger as _dl
+                _ddb = DecisionLogSessionLocal()
+                try:
+                    _trade_log_id = _dl.log_trade_entry(
+                        _ddb,
+                        paper_trade_id=new_trade.id,
+                        symbol=underlying,
+                        direction=signal_type,
+                        entry_timestamp=now,
+                        entry_price=entry_price,
+                        entry_directional_score=rec.get("directional_score"),
+                        entry_confidence=rec.get("confidence"),
+                        entry_trade_size=_amount,
+                        entry_size_reasoning=(
+                            f"vol_sizing with ATR based on {conviction_level} conviction"
+                        ),
+                        entry_leverage=leverage,
+                        entry_leverage_reasoning=(
+                            f"risk_profile based, conviction {conviction_level}"
+                        ),
+                        holding_window_hours=round(holding_minutes / 60, 2),
+                    )
+                    _dl.log_trade_event(
+                        _ddb,
+                        trade_log_id=_trade_log_id,
+                        event_type="open",
+                        run_id=request_id,
+                        directional_score=rec.get("directional_score"),
+                        keep_vs_close="open",
+                        decision_reason=f"Opened {signal_type} {execution_ticker} @ ${entry_price:.2f} (${_amount:.2f}, {conviction_level})",
+                        event_details={
+                            "entry_price": entry_price,
+                            "amount": _amount,
+                            "conviction": conviction_level,
+                            "leverage": leverage,
+                            "trading_type": trading_type,
+                            "holding_window_until": _utc_iso(window_until),
+                        },
+                    )
+                    _ddb.commit()
+                except Exception as _dlx:
+                    _ddb.rollback()
+                    print(f"[decision-log] trade entry error: {_dlx}")
+                finally:
+                    _ddb.close()
+            except Exception as _dlx:
+                print(f"[decision-log] trade entry error (non-fatal): {_dlx}")
             _alpaca_pending.append((new_trade, "open"))
             if _portfolio_cap is not None:
                 _open_exposure += _amount
@@ -912,6 +1000,47 @@ def _close_position(pos, exit_price: float, now: datetime, db, reason: Optional[
     pos.realized_pnl_pct = round(pnl_pct, 4)
     if reason:
         pos.close_reason = reason
+
+    # ── Decision Log: trade close ───────────────────────────────────────
+    try:
+        from database.engine import DecisionLogSessionLocal
+        from database.models import DecisionLogTrade
+        from services.decision_logger import logger as _dl
+        _ddb = DecisionLogSessionLocal()
+        try:
+            _trade_log = _ddb.query(DecisionLogTrade).filter(
+                DecisionLogTrade.paper_trade_id == pos.id
+            ).first()
+            if _trade_log:
+                _dl.log_trade_close(
+                    _ddb,
+                    trade_log_id=_trade_log.id,
+                    close_timestamp=now,
+                    close_price=exit_price,
+                    close_trigger=reason or "unknown",
+                    realized_pnl=pos.realized_pnl,
+                )
+                _dl.log_trade_event(
+                    _ddb,
+                    trade_log_id=_trade_log.id,
+                    event_type="close",
+                    run_id=None,
+                    keep_vs_close="close",
+                    decision_reason=f"Position closed: {reason or 'unknown'}. Exit price={exit_price}, P&L={pos.realized_pnl}",
+                    event_details={
+                        "exit_price": exit_price,
+                        "realized_pnl": pos.realized_pnl,
+                        "reason": reason,
+                    },
+                )
+                _ddb.commit()
+        except Exception as _dlx:
+            _ddb.rollback()
+            print(f"[decision-log] close error: {_dlx}")
+        finally:
+            _ddb.close()
+    except Exception as _dlx:
+        print(f"[decision-log] close error (non-fatal): {_dlx}")
 
 
 def get_summary(db) -> Dict[str, Any]:

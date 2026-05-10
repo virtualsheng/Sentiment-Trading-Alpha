@@ -128,6 +128,34 @@ class PipelineService:
             self.symbols = self._get_default_symbols()
         self.model_name = self._resolve_active_model_name(config)
         self.timestamp = datetime.now(timezone.utc).isoformat()
+        self._run_started = time.time()
+
+        # ── Decision Log: run start ──────────────────────────────────────
+        try:
+            from database.engine import DecisionLogSessionLocal
+            from services.decision_logger import logger as dl
+            ddb = DecisionLogSessionLocal()
+            try:
+                dl.log_run_start(
+                    ddb,
+                    run_id=self.request_id,
+                    trigger_source=trigger_source,
+                    extraction_model=str(getattr(config, "extraction_model", "") or "").strip() or None,
+                    reasoning_model=str(getattr(config, "reasoning_model", "") or "").strip() or None,
+                    config_snapshot={
+                        "entry_threshold": getattr(config, "entry_threshold", None),
+                        "inference_backend": getattr(config, "inference_backend", "ollama"),
+                        "risk_profile": getattr(config, "risk_profile", "moderate"),
+                    },
+                )
+                ddb.commit()
+            except Exception as dl_exc:
+                ddb.rollback()
+                print(f"[decision-log] run start error: {dl_exc}")
+            finally:
+                ddb.close()
+        except Exception as dl_exc:
+            print(f"[decision-log] run start error (non-fatal): {dl_exc}")
 
         # ── Lock (idempotency) ────────────────────────────────────────────
         analysis_id = await self._acquire_lock(self.request_id)
@@ -544,6 +572,63 @@ class PipelineService:
             price_context=price_context,
         )
         self._mark_scraped_articles_processed(db, ingestion_trace.get("selected_article_ids") or [])
+
+        # ── Decision Logging ────────────────────────────────────────────
+        try:
+            from database.engine import DecisionLogSessionLocal
+            from services.decision_logger import logger as dl
+
+            ddb = DecisionLogSessionLocal()
+            try:
+                # Run-level logging
+                dl.log_run_complete(
+                    ddb,
+                    run_id=self.request_id,
+                    total_articles_considered=len(posts) if posts else None,
+                    total_articles_used=len(sentiment_results) if sentiment_results else None,
+                    duration_ms=int((time.time() - self._run_started) * 1000) if hasattr(self, '_run_started') else None,
+                )
+
+                # Per-symbol logging
+                for sym, result in (sentiment_results or {}).items():
+                    raw_scores = {
+                        "bluster": result.get("bluster_score"),
+                        "policy": result.get("policy_score"),
+                        "confidence": result.get("confidence"),
+                        "directional": result.get("directional_score"),
+                    }
+                    signal_dict = consensus_signal.model_dump(mode="json") if consensus_signal else {}
+                    dl.log_symbol_scores(
+                        ddb,
+                        run_id=self.request_id,
+                        symbol=sym,
+                        raw_scores=raw_scores,
+                        final_signal={
+                            "type": signal_dict.get("signal_type"),
+                            "conviction": signal_dict.get("conviction_level"),
+                            "trading_type": signal_dict.get("trading_type"),
+                            "holding_window_hours": signal_dict.get("holding_period_hours"),
+                            "urgency": signal_dict.get("urgency"),
+                            "stop_loss_pct": signal_dict.get("stop_loss_pct"),
+                            "take_profit_pct": signal_dict.get("take_profit_pct"),
+                            "data_gap_hold": signal_dict.get("data_gap_hold"),
+                        },
+                        entry_threshold_used=stage_metrics.get("entry_threshold"),
+                        materiality_info={
+                            "checked": stage_metrics.get("materiality", {}).get("gate_checked", False),
+                            "blocked": stage_metrics.get("materiality", {}).get("gate_blocked", False),
+                            "reason": stage_metrics.get("materiality", {}).get("gate_reason"),
+                            "rolling_baseline": stage_metrics.get("materiality", {}).get("rolling_baseline"),
+                        },
+                    )
+                ddb.commit()
+            except Exception as dl_exc:
+                ddb.rollback()
+                print(f"[decision-log] symbol logging error: {dl_exc}")
+            finally:
+                ddb.close()
+        except Exception as dl_exc:
+            print(f"[decision-log] pipeline logging error (non-fatal): {dl_exc}")
 
         yield {"type": "final_response", "response": response}
 

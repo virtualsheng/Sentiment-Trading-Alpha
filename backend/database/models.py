@@ -499,3 +499,206 @@ def init_db():
 def drop_db():
     """Drop all tables from the database."""
     Base.metadata.drop_all(bind=engine)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Decision Log Models (separate DB — decision_log.db)
+# ═══════════════════════════════════════════════════════════════════════
+
+# These models use the decision_log_db engine, not the main engine.
+# They're defined here so all models are in one file for import convenience.
+# The actual DB binding is done in decision_logger.py using its own Base.
+
+from sqlalchemy.orm import declarative_base as _declarative_base
+
+DecisionLogBase = _declarative_base()
+
+
+class DecisionLogRun(DecisionLogBase):
+    """One row per full analysis run."""
+    __tablename__ = "decision_log_run"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(String(64), unique=True, nullable=False, index=True)
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    trigger_source = Column(String(32), nullable=True)
+    extraction_model = Column(String(128), nullable=True)
+    reasoning_model = Column(String(128), nullable=True)
+    config_hash = Column(String(64), nullable=True)
+    config_snapshot = Column(JSON, nullable=True)
+    total_articles_considered = Column(Integer, nullable=True)
+    total_articles_used = Column(Integer, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+
+
+class DecisionLogSymbol(DecisionLogBase):
+    """One row per symbol per analysis run."""
+    __tablename__ = "decision_log_symbol"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(String(64), ForeignKey("decision_log_run.run_id"), nullable=False, index=True)
+    symbol = Column(String(16), nullable=False)
+    blue_team_structured_output = Column(JSON, nullable=True)
+    red_team_structured_output = Column(JSON, nullable=True)
+    raw_bluster_score = Column(Float, nullable=True)
+    raw_policy_score = Column(Float, nullable=True)
+    raw_confidence_score = Column(Float, nullable=True)
+    raw_directional_score = Column(Float, nullable=True)
+    decay_half_life_hours = Column(Float, nullable=True)
+    hold_decay_half_life_hours = Column(Float, nullable=True)
+    decay_factor_applied = Column(Float, nullable=True)
+    hold_decay_factor_applied = Column(Float, nullable=True)
+    blended_bluster_score = Column(Float, nullable=True)
+    blended_policy_score = Column(Float, nullable=True)
+    blended_confidence_score = Column(Float, nullable=True)
+    blended_directional_score = Column(Float, nullable=True)
+    final_signal_type = Column(String(16), nullable=True)
+    final_conviction = Column(String(16), nullable=True)
+    final_trading_type = Column(String(32), nullable=True)
+    final_holding_window_hours = Column(Float, nullable=True)
+    final_urgency = Column(String(16), nullable=True)
+    final_stop_loss_pct = Column(Float, nullable=True)
+    final_take_profit_pct = Column(Float, nullable=True)
+    data_gap_hold = Column(Integer, nullable=True)
+    atr_14d_pct = Column(Float, nullable=True)
+    regime_adaptation_triggered = Column(Integer, nullable=True)
+    regime_adaptation_atr_pct = Column(Float, nullable=True)
+    regime_adaptation_original_threshold = Column(Float, nullable=True)
+    regime_adaptation_adjusted_threshold = Column(Float, nullable=True)
+    entry_threshold_used = Column(Float, nullable=True)
+    materiality_gate_checked = Column(Integer, nullable=True)
+    materiality_gate_blocked = Column(Integer, nullable=True)
+    materiality_gate_reason = Column(Text, nullable=True)
+    materiality_rolling_baseline = Column(JSON, nullable=True)
+    red_team_disagreed = Column(Integer, nullable=True)
+    red_team_confidence_delta = Column(Float, nullable=True)
+    red_team_override_resolved_to = Column(String(16), nullable=True)
+
+    __table_args__ = (
+        Index("ix_dl_symbol_run_sym", "run_id", "symbol"),
+    )
+
+
+class DecisionLogArticle(DecisionLogBase):
+    """Articles considered per symbol during a run."""
+    __tablename__ = "decision_log_article"
+
+    id = Column(Integer, primary_key=True)
+    symbol_log_id = Column(Integer, ForeignKey("decision_log_symbol.id"), nullable=False, index=True)
+    title = Column(Text, nullable=True)
+    source = Column(String(128), nullable=True)
+    published_at = Column(DateTime(timezone=True), nullable=True)
+    url_hash = Column(String(64), nullable=True)
+    was_used = Column(Integer, nullable=True)
+    relevance_score = Column(Float, nullable=True)
+
+    __table_args__ = (
+        Index("ix_dl_article_sym_log", "symbol_log_id"),
+    )
+
+
+class DecisionLogBlend(DecisionLogBase):
+    """Prior runs that contributed to blended scores for a symbol."""
+    __tablename__ = "decision_log_blend"
+
+    id = Column(Integer, primary_key=True)
+    symbol_log_id = Column(Integer, ForeignKey("decision_log_symbol.id"), nullable=False, index=True)
+    prior_run_timestamp = Column(DateTime(timezone=True), nullable=True)
+    prior_run_request_id = Column(String(64), nullable=True)
+    weight = Column(Float, nullable=True)
+    prior_directional_score = Column(Float, nullable=True)
+
+    __table_args__ = (
+        Index("ix_dl_blend_sym_log", "symbol_log_id"),
+    )
+
+
+class DecisionLogTechnical(DecisionLogBase):
+    """Technical indicators evaluated for a symbol during a run."""
+    __tablename__ = "decision_log_technical"
+
+    id = Column(Integer, primary_key=True)
+    symbol_log_id = Column(Integer, ForeignKey("decision_log_symbol.id"), nullable=False, index=True)
+    rsi_14 = Column(Float, nullable=True)
+    sma_50 = Column(Float, nullable=True)
+    sma_200 = Column(Float, nullable=True)
+    golden_cross = Column(Integer, nullable=True)
+    death_cross = Column(Integer, nullable=True)
+    macd_positive = Column(Integer, nullable=True)
+    volume_above_average = Column(Integer, nullable=True)
+    bb_position = Column(String(16), nullable=True)
+    confidence_adjustment_total = Column(Float, nullable=True)
+    adjustment_breakdown = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        Index("ix_dl_tech_sym_log", "symbol_log_id"),
+    )
+
+
+class DecisionLogTrade(DecisionLogBase):
+    """One row per trade (position open → close)."""
+    __tablename__ = "decision_log_trade"
+
+    id = Column(Integer, primary_key=True)
+    paper_trade_id = Column(Integer, nullable=True, index=True)
+    symbol = Column(String(16), nullable=False)
+    direction = Column(String(8), nullable=False)
+    entry_timestamp = Column(DateTime(timezone=True), nullable=False)
+    entry_price = Column(Float, nullable=True)
+    entry_directional_score = Column(Float, nullable=True)
+    entry_confidence = Column(Float, nullable=True)
+    entry_atr_pct = Column(Float, nullable=True)
+    entry_trade_size = Column(Float, nullable=True)
+    entry_size_reasoning = Column(Text, nullable=True)
+    entry_leverage = Column(Integer, nullable=True)
+    entry_leverage_reasoning = Column(Text, nullable=True)
+    holding_window_hours = Column(Float, nullable=True)
+    close_timestamp = Column(DateTime(timezone=True), nullable=True)
+    close_price = Column(Float, nullable=True)
+    close_trigger = Column(String(32), nullable=True)
+    close_final_score = Column(Float, nullable=True)
+    realized_pnl = Column(Float, nullable=True)
+    closed = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        Index("ix_dl_trade_symbol", "symbol"),
+        Index("ix_dl_trade_paper_id", "paper_trade_id"),
+    )
+
+
+class DecisionLogTradeEvent(DecisionLogBase):
+    """Every lifecycle event for a trade (append-only)."""
+    __tablename__ = "decision_log_trade_event"
+
+    id = Column(Integer, primary_key=True)
+    trade_log_id = Column(Integer, ForeignKey("decision_log_trade.id"), nullable=False, index=True)
+    event_type = Column(String(32), nullable=False, index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False)
+    run_id = Column(String(64), nullable=True)
+    directional_score = Column(Float, nullable=True)
+    decay_factor = Column(Float, nullable=True)
+    keep_vs_close = Column(String(32), nullable=True)
+    decision_reason = Column(Text, nullable=True)
+    event_details = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        Index("ix_dl_te_trade_log", "trade_log_id"),
+        Index("ix_dl_te_event_type", "event_type"),
+    )
+
+
+class DecisionLogDecisionDiff(DecisionLogBase):
+    """Mid-position decision changes logged separately."""
+    __tablename__ = "decision_log_decision_diff"
+
+    id = Column(Integer, primary_key=True)
+    trade_event_id = Column(Integer, ForeignKey("decision_log_trade_event.id"), nullable=True, index=True)
+    run_id = Column(String(64), nullable=False)
+    before_directional_score = Column(Float, nullable=True)
+    after_directional_score = Column(Float, nullable=True)
+    before_signal_type = Column(String(16), nullable=True)
+    after_signal_type = Column(String(16), nullable=True)
+    before_size_pct = Column(Float, nullable=True)
+    after_size_pct = Column(Float, nullable=True)
+    reason_code = Column(String(64), nullable=True)

@@ -52,6 +52,61 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+# ── Decision Log Database (separate SQLite file) ─────────────────────
+# Stored in its own DB to avoid lock contention with the main application.
+# Same WAL-mode pragmas, same permissions hardening.
+
+DECISION_LOG_PATH = REPO_ROOT / "decision_log.db"
+DEFAULT_DECISION_LOG_URL = f"sqlite:///{DECISION_LOG_PATH.as_posix()}"
+DECISION_LOG_URL = os.getenv("DECISION_LOG_DATABASE_URL", DEFAULT_DECISION_LOG_URL)
+
+_decision_log_engine = create_engine(
+    DECISION_LOG_URL,
+    connect_args=_sqlite_connect_args,
+    pool_pre_ping=True,
+    pool_size=3,
+    max_overflow=5,
+)
+
+DecisionLogSessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=_decision_log_engine,
+    expire_on_commit=False,
+)
+
+
+def get_decision_log_db() -> Generator[Session, None, None]:
+    """Yields a database session for the decision log database."""
+    db = DecisionLogSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@event.listens_for(_decision_log_engine, "connect")
+def set_decision_log_pragma(dbapi_connection, connection_record):
+    """Configure SQLite pragmas for the decision log DB."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA cache_size=5000")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    try:
+        if os.name != "nt":
+            db_path = DECISION_LOG_PATH
+            if db_path.exists():
+                import stat
+                current = db_path.stat().st_mode
+                owner_only = stat.S_IRUSR | stat.S_IWUSR
+                if current & (stat.S_IRGRP | stat.S_IROTH | stat.S_IWGRP | stat.S_IWOTH):
+                    db_path.chmod(owner_only)
+    except Exception:
+        pass
+    cursor.close()
+
+
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     """Configure SQLite pragmas for better performance."""

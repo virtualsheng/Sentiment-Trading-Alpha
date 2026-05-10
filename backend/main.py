@@ -239,6 +239,9 @@ async def lifespan(app: FastAPI):
     from database.migrate import migrate
     migrate()
     print("Database initialized")
+    from services.decision_logger import ensure_decision_log_tables
+    ensure_decision_log_tables()
+    print("Decision log tables initialized")
     from services.analysis.cache_service import get_price_cache_service
     get_price_cache_service()
     print("Price cache service initialized")
