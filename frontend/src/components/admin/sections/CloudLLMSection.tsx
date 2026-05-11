@@ -70,7 +70,7 @@ const PROVIDER_DEFAULT_MODELS: Record<string, string[]> = {
 };
 
 const LOCAL_URLS: ProviderUrls = {
-    ollama: "http://localhost:11434",
+    ollama: "http://localhost:11434/api/generate",
     vllm: "http://localhost:8000",
     "llama.cpp": "http://localhost:8080",
 };
@@ -194,7 +194,14 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
             return { ...c, openai_model: best };
         });
     }, [cloudModels, currentProvider, setConfig]);
+
+    // Track the last-used local models so we can restore them when switching back to local
     const lastLocalModelsRef = useRef<{ extraction: string; reasoning: string }>({
+        extraction: config.extraction_model,
+        reasoning: config.reasoning_model,
+    });
+    // Track the last-used cloud models so we can restore them when switching back to cloud
+    const lastCloudModelsRef = useRef<{ extraction: string; reasoning: string }>({
         extraction: config.extraction_model,
         reasoning: config.reasoning_model,
     });
@@ -369,6 +376,20 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
     // ── API mode toggle handler (Cloud ↔ Local) ──────────────────────
     const handleApiModeChange = (mode: "cloud" | "local") => {
         if (mode === config.api_mode) return;
+
+        // Save the current models before switching
+        if (config.api_mode === "local") {
+            lastLocalModelsRef.current = {
+                extraction: config.extraction_model,
+                reasoning: config.reasoning_model,
+            };
+        } else {
+            lastCloudModelsRef.current = {
+                extraction: config.extraction_model,
+                reasoning: config.reasoning_model,
+            };
+        }
+
         setConfig((c) => {
             const newProvider = mode === "cloud" ? c.cloud_provider : c.local_provider;
             // Only smart-fill if user hasn't manually edited the URL
@@ -385,12 +406,62 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
 
             const newUrl = (!wasEdited || modeMismatch || !currentUrl) ? fillUrl : currentUrl;
 
+            // Determine which models to use for the new mode
+            const switchingToLocal = mode === "local";
+            const availableLocalModels = config.local_models || [];
+            const availableCloudModels = cloudModels;
+
+            let nextExtraction = c.extraction_model;
+            let nextReasoning = c.reasoning_model;
+
+            if (switchingToLocal) {
+                // Switching to local — try to restore last-used local models, or pick first available
+                if (availableLocalModels.length > 0) {
+                    const localSet = new Set(availableLocalModels);
+                    const lastLocal = lastLocalModelsRef.current;
+                    if (lastLocal.extraction && localSet.has(lastLocal.extraction)) {
+                        nextExtraction = lastLocal.extraction;
+                    } else if (lastLocal.reasoning && localSet.has(lastLocal.reasoning)) {
+                        nextExtraction = lastLocal.reasoning;
+                    } else {
+                        nextExtraction = availableLocalModels[0];
+                    }
+                    if (lastLocal.reasoning && localSet.has(lastLocal.reasoning)) {
+                        nextReasoning = lastLocal.reasoning;
+                    } else if (lastLocal.extraction && localSet.has(lastLocal.extraction)) {
+                        nextReasoning = lastLocal.extraction;
+                    } else {
+                        nextReasoning = availableLocalModels.length > 1 ? availableLocalModels[1] : availableLocalModels[0];
+                    }
+                }
+            } else {
+                // Switching to cloud — try to restore last-used cloud models, or use provider default
+                const lastCloud = lastCloudModelsRef.current;
+                const cloudSet = new Set(availableCloudModels);
+                const preferences = PROVIDER_DEFAULT_MODELS[newProvider] || PROVIDER_DEFAULT_MODELS.custom;
+                const providerDefault = preferences.find((m) => cloudSet.has(m)) || "gpt-4o-mini";
+
+                // Try last cloud extraction model first, then fall back to provider default
+                if (lastCloud.extraction && cloudSet.has(lastCloud.extraction)) {
+                    nextExtraction = lastCloud.extraction;
+                } else {
+                    nextExtraction = providerDefault;
+                }
+                // Try last cloud reasoning model first, then fall back
+                if (lastCloud.reasoning && cloudSet.has(lastCloud.reasoning)) {
+                    nextReasoning = lastCloud.reasoning;
+                } else {
+                    nextReasoning = providerDefault;
+                }
+            }
+
             return {
                 ...c,
                 api_mode: mode,
                 api_url: newUrl,
-                // Reset edited flag if we're filling new content
                 user_edited_url: wasEdited && !modeMismatch && currentUrl !== "",
+                extraction_model: nextExtraction,
+                reasoning_model: nextReasoning,
             };
         });
     };
@@ -471,11 +542,10 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
                     <button
                         type="button"
                         onClick={() => handleApiModeChange("cloud")}
-                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${
-                            isCloudMode
-                                ? "border-blue-400 bg-blue-500/10 text-blue-100"
-                                : "border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700"
-                        }`}
+                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${isCloudMode
+                            ? "border-blue-400 bg-blue-500/10 text-blue-100"
+                            : "border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700"
+                            }`}
                     >
                         <p className="text-sm font-semibold">☁️ Cloud</p>
                         <p className="mt-0.5 text-[11px] text-slate-400 font-medium">
@@ -488,11 +558,10 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
                     <button
                         type="button"
                         onClick={() => handleApiModeChange("local")}
-                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${
-                            !isCloudMode
-                                ? "border-emerald-400 bg-emerald-500/10 text-emerald-100"
-                                : "border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700"
-                        }`}
+                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${!isCloudMode
+                            ? "border-emerald-400 bg-emerald-500/10 text-emerald-100"
+                            : "border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700"
+                            }`}
                     >
                         <p className="text-sm font-semibold">🖥️ Local</p>
                         <p className="mt-0.5 text-[11px] text-slate-400 font-medium">
@@ -543,11 +612,10 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
                             value={config.api_url ?? ""}
                             onChange={(e) => handleUrlChange(e.target.value)}
                             placeholder={isCloudMode ? "https://api.openai.com/v1" : "http://localhost:11434"}
-                            className={`w-full rounded-lg border bg-slate-800 px-3 py-2 text-sm text-white outline-none font-mono transition-colors ${
-                                protocolError
-                                    ? "border-red-500 focus:border-red-400"
-                                    : "border-slate-700 focus:border-blue-400"
-                            }`}
+                            className={`w-full rounded-lg border bg-slate-800 px-3 py-2 text-sm text-white outline-none font-mono transition-colors ${protocolError
+                                ? "border-red-500 focus:border-red-400"
+                                : "border-slate-700 focus:border-blue-400"
+                                }`}
                         />
                         {config.user_edited_url && (
                             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-amber-500 font-medium">
@@ -737,7 +805,7 @@ export function CloudLLMSection({ config, setConfig, isAdvancedMode }: CloudLLMS
                     </>
                 ) : (
                     <>
-                    {/* ── Local-specific: per-provider docs ──────── */}
+                        {/* ── Local-specific: per-provider docs ──────── */}
                         <div className="rounded-lg border border-slate-700/50 bg-slate-900/60 px-4 py-3 text-[11px] text-slate-500 leading-relaxed">
                             <p className="font-medium text-slate-400 mb-1">
                                 {currentProvider === "ollama"

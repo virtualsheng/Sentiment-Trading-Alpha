@@ -18,11 +18,13 @@ from config.logic_loader import LOGIC as _L
 
 _MARKET_TZ = ZoneInfo("America/New_York")
 
-# Extended trading hours Mon–Fri
-_EXTENDED_OPEN  = time_cls(4, 0)
-_EXTENDED_CLOSE = time_cls(20, 0)
-_REGULAR_OPEN   = time_cls(9, 30)
-_REGULAR_CLOSE  = time_cls(16, 0)
+# 24/5 trading schedule (Alpaca: Sun 8 PM ET → Fri 8 PM ET)
+_OVERNIGHT_OPEN  = time_cls(20, 0)   # 8:00 PM ET — overnight session start
+_OVERNIGHT_CLOSE = time_cls(4, 0)    # 4:00 AM ET — overnight session end
+_EXTENDED_OPEN   = time_cls(4, 0)    # 4:00 AM ET — pre-market open
+_EXTENDED_CLOSE  = time_cls(20, 0)   # 8:00 PM ET — after-hours close
+_REGULAR_OPEN    = time_cls(9, 30)   # 9:30 AM ET — regular session open
+_REGULAR_CLOSE   = time_cls(16, 0)   # 4:00 PM ET — regular session close
 
 
 def _allow_extended_hours_trading(db=None) -> bool:
@@ -66,21 +68,45 @@ def _resolve_position_market_price(open_pos, quotes_by_symbol: Dict[str, Dict[st
 
 
 def market_status(allow_extended_hours: bool = True) -> Dict[str, Any]:
-    """Return current market session for display and gate-keeping."""
+    """Return current market session for display and gate-keeping.
+
+    Supports Alpaca's 24/5 schedule: Sunday 8 PM ET → Friday 8 PM ET.
+    Sessions:
+      - Overnight:  8:00 PM – 4:00 AM ET (wrap-around, starts Sunday evening)
+      - Pre-Market: 4:00 AM – 9:30 AM ET
+      - Regular:    9:30 AM – 4:00 PM ET
+      - After-Hours: 4:00 PM – 8:00 PM ET
+    """
     now_et = datetime.now(_MARKET_TZ)
     t = now_et.time()
+    weekday = now_et.weekday()  # Mon=0 … Sun=6
 
-    if now_et.weekday() >= 5:
+    # ── Weekend: only tradeable during Sunday overnight session ──
+    if weekday >= 5:
+        # Sunday (6) 8 PM – midnight = overnight session for Monday
+        if allow_extended_hours and weekday == 6 and t >= _OVERNIGHT_OPEN:
+            return {"status": "overnight", "label": "Overnight (Sunday)", "tradeable": True}
         return {"status": "closed", "label": "Closed (Weekend)", "tradeable": False}
 
-    if _REGULAR_OPEN <= t <= _REGULAR_CLOSE:
-        return {"status": "open", "label": "Market Open", "tradeable": True}
+    # ── Weekday sessions ──────────────────────────────────────────
+    # Overnight session: 8 PM – 4 AM (wrap-around past midnight)
+    if t >= _OVERNIGHT_OPEN or t < _OVERNIGHT_CLOSE:
+        return {
+            "status": "overnight",
+            "label": "Overnight" if allow_extended_hours else "Overnight (Trading Disabled)",
+            "tradeable": allow_extended_hours,
+        }
+    # Pre-market: 4 AM – 9:30 AM
     if _EXTENDED_OPEN <= t < _REGULAR_OPEN:
         return {
             "status": "pre-market",
             "label": "Pre-Market" if allow_extended_hours else "Pre-Market (Trading Disabled)",
             "tradeable": allow_extended_hours,
         }
+    # Regular: 9:30 AM – 4 PM
+    if _REGULAR_OPEN <= t <= _REGULAR_CLOSE:
+        return {"status": "open", "label": "Market Open", "tradeable": True}
+    # After-hours: 4 PM – 8 PM
     if _REGULAR_CLOSE < t <= _EXTENDED_CLOSE:
         return {
             "status": "after-hours",
@@ -137,7 +163,7 @@ def _entry_threshold_for_session(session_status: str, app_config) -> float:
         pass
 
     thresholds = _L.get("entry_thresholds", {})
-    if session_status in ("pre-market", "after-hours"):
+    if session_status in ("pre-market", "after-hours", "overnight"):
         return max(0.0, float(thresholds.get("closed_market", thresholds.get("normal", 0.42))))
     return max(0.0, float(thresholds.get("normal", 0.42)))
 
