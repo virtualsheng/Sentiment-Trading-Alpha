@@ -92,6 +92,15 @@ export type AppConfig = {
         materiality_min_sentiment_delta: number;
         reentry_cooldown_minutes: number;
         min_same_day_exit_edge_pct: number;
+        crazy?: {
+            entry_threshold: number;
+            stop_loss_pct: number;
+            take_profit_pct: number;
+            materiality_min_posts_delta: number;
+            materiality_min_sentiment_delta: number;
+            reentry_cooldown_minutes: number;
+            min_same_day_exit_edge_pct: number;
+        };
     };
     available_models: string[];
     local_models: string[];

@@ -162,6 +162,23 @@ def _entry_threshold_for_session(session_status: str, app_config) -> float:
     except Exception:
         pass
 
+    # Apply crazy profile entry thresholds if applicable
+    is_crazy = False
+    try:
+        if app_config is not None:
+            profile = str(getattr(app_config, "risk_profile", "") or "").strip().lower()
+            is_crazy = profile == "crazy"
+    except Exception:
+        pass
+
+    if is_crazy:
+        crazy_cfg = _L.get("crazy", {})
+        crazy_et = crazy_cfg.get("entry_thresholds", {})
+        if isinstance(crazy_et, dict):
+            if session_status in ("pre-market", "after-hours", "overnight"):
+                return max(0.0, float(crazy_et.get("closed_market", 0.35)))
+            return max(0.0, float(crazy_et.get("normal", 0.35)))
+
     thresholds = _L.get("entry_thresholds", {})
     if session_status in ("pre-market", "after-hours", "overnight"):
         return max(0.0, float(thresholds.get("closed_market", thresholds.get("normal", 0.42))))
@@ -786,9 +803,16 @@ def process_signals(
         # (directional signals only — HOLD signals skip this)
         # We gate on conviction_level: only HIGH conviction gets an automatic pass.
         # MEDIUM requires the configured entry threshold; LOW is always blocked.
+        # EXCEPTION: crazy profile allows LOW conviction entries.
+        _is_crazy_profile = False
+        try:
+            if _app_config is not None:
+                _is_crazy_profile = str(getattr(_app_config, "risk_profile", "") or "").strip().lower() == "crazy"
+        except Exception:
+            pass
         _threshold = _entry_threshold_for_session(session["status"], _app_config)
         _conviction = str(conviction_level or "MEDIUM").upper()
-        if _conviction == "LOW":
+        if _conviction == "LOW" and not _is_crazy_profile:
             action_summary["action"] = "skipped"
             action_summary["reason"] = "low_conviction_blocked"
             action_summary["entry_threshold"] = _threshold

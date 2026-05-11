@@ -212,5 +212,45 @@
     "hold_signal_respects_window": true,
     "_comment_flip": "Whether a direction flip (LONG->SHORT or vice versa) overrides the window and closes+reopens immediately.",
     "flip_overrides_window": true
+  },
+  "crazy": {
+    "_comment": "Overrides applied when risk_profile = 'crazy' (or used as a starting point for 'custom'). Each value replaces its top-level counterpart.",
+    "entry_thresholds": {
+      "normal": 0.35,
+      "closed_market": 0.35,
+      "keep_normal": 0.22,
+      "keep_closed_market": 0.15
+    },
+    "continuous_entry": {
+      "sigmoid_midpoint": 0.35,
+      "skip_floor": 0.08,
+      "keep_floor": 0.08
+    },
+    "conviction": {
+      "high_score_threshold": 0.50,
+      "high_confidence_threshold": 0.60
+    },
+    "materiality_gate": {
+      "min_posts_delta": 4,
+      "min_sentiment_delta": 0.18
+    },
+    "reentry_cooldown_minutes": 60,
+    "min_same_day_exit_edge_pct": 0.3,
+    "stop_loss_pct": 2.5,
+    "take_profit_pct": 5.0,
+    "vol_sizing": {
+      "conviction_scalars": {
+        "HIGH": 1.8,
+        "MEDIUM": 1.2,
+        "LOW": 0.7
+      }
+    },
+    "signal_decay": {
+      "default_half_life_hours": 4.0,
+      "default_hold_half_life_hours": 8.0
+    },
+    "regime_adaptation": {
+      "high_vol_multiplier": 1.10
+    }
   }
 }

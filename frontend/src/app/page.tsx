@@ -747,8 +747,8 @@ export default function Home() {
                                             const profile = config.risk_profile || "standard";
                                             const leverageMap: Record<string, string> = {
                                                 conservative: "1x+inv",
-                                                standard: "≤2x",
-                                                crazy: "3x",
+                                                standard: "≤2x cond.",
+                                                crazy: "3x always",
                                                 custom: "custom",
                                             };
                                             const profileLabel = profile.charAt(0).toUpperCase() + profile.slice(1);
