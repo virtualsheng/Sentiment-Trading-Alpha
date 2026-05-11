@@ -408,7 +408,8 @@ class SignalService:
         source_bias = bool(red_team_review.source_bias_penalty_applied)
         blue_rec_map = self._recommendations_by_underlying(blue_team_signal)
 
-        for review in red_team_review.symbol_reviews:
+        total = len(red_team_review.symbol_reviews)
+        for idx, review in enumerate(red_team_review.symbol_reviews, 1):
             symbol = str(review.symbol or "").upper().strip()
             adjusted_signal = str(review.adjusted_signal or "HOLD").upper().strip()
             adjusted_urgency = str(review.adjusted_urgency or "LOW").upper().strip()
@@ -416,14 +417,19 @@ class SignalService:
             blue_symbol_signal = str(blue_rec.get("action") or ("HOLD" if not blue_rec else blue_signal_type)).upper().strip()
             if blue_symbol_signal in {"LONG", "SHORT"}:
                 blue_symbol_signal = "BUY" if blue_symbol_signal == "LONG" else "SELL"
-            if not SentimentEngine.red_team_override_is_material(
+            override_is_material = SentimentEngine.red_team_override_is_material(
                 adjusted_signal=adjusted_signal,
                 blue_signal=blue_symbol_signal,
                 evidence=list(review.evidence or []),
                 key_risks=list(review.key_risks or []),
                 source_bias_applied=source_bias,
-            ):
+            )
+            if not override_is_material:
+                original_red = adjusted_signal
                 adjusted_signal = blue_symbol_signal or "HOLD"
+                print(f"Red Team [{idx}/{total}]: {symbol} blue={blue_symbol_signal} → red={original_red} (material=False) — keeping blue={adjusted_signal}")
+            else:
+                print(f"Red Team [{idx}/{total}]: {symbol} blue={blue_symbol_signal} → red={adjusted_signal} (material=True) — using red")
             adjusted_confidence = SentimentEngine.compute_red_team_confidence(
                 adjusted_signal=adjusted_signal,
                 blue_signal=blue_symbol_signal or blue_signal_type,

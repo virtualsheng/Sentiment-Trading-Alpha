@@ -30,11 +30,10 @@ LEGACY_DISABLED_RSS_FEED_URLS = {
 }
 DEFAULT_RSS_FEEDS: List[Dict[str, str]] = [
     {"key": "calculated_risk_rss", "label": "Calculated Risk RSS", "url": "https://feeds.feedburner.com/CalculatedRisk"},
-    {"key": "nyt_business", "label": "New York Times Business", "url": "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml"},
     {"key": "trump_truth", "label": "Trump Truth", "url": "https://trumpstruth.org/feed"},
     {"key": "bbc_world", "label": "BBC World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml"},
-    {"key": "marketwatch", "label": "MarketWatch", "url": "https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines"},
-    {"key": "npr_world", "label": "NPR World", "url": "https://feeds.npr.org/1017/rss.xml"},
+    {"key": "npr_news", "label": "NPR News", "url": "https://feeds.npr.org/1017/rss.xml"},
+    {"key": "techcrunch", "label": "TechCrunch", "url": "https://techcrunch.com/feed/"},
 ]
 DEFAULT_EXTRACTION_MODEL = ""
 DEFAULT_REASONING_MODEL = ""

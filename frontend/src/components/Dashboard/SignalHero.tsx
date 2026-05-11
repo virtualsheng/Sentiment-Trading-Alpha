@@ -77,8 +77,8 @@ export default function SignalHero({
                                     type="button"
                                     onClick={() => onRecommendationClick(rec)}
                                     className={`text-left rounded-xl border p-4 transition-colors hover:bg-slate-800/40 ${isShort
-                                            ? "border-red-500/20 bg-red-500/5"
-                                            : "border-emerald-500/20 bg-emerald-500/5"
+                                        ? "border-red-500/20 bg-red-500/5"
+                                        : "border-emerald-500/20 bg-emerald-500/5"
                                         }`}
                                 >
                                     <div className="flex items-center justify-between mb-2">
@@ -117,10 +117,15 @@ export default function SignalHero({
                                 </div>
                             );
                         }
+                        const rec = recommendations.find(r => r.underlying_symbol === symbol);
+                        const perSymbolSignal = rec?.thesis || "HOLD";
                         const pos = sent.market_bluster >= 0;
                         return (
                             <div key={symbol} className="rounded-lg border border-slate-700/50 bg-slate-800/30 p-3">
                                 <p className="text-xs font-bold text-slate-300">{symbol}</p>
+                                <p className={`text-[11px] font-semibold ${signalColor(perSymbolSignal)}`}>
+                                    {perSymbolSignal}
+                                </p>
                                 <div className="mt-1 space-y-1">
                                     <div className="flex justify-between text-[10px]">
                                         <span className="text-slate-500">Bluster</span>
@@ -186,7 +191,7 @@ export default function SignalHero({
                                         <div>
                                             <span className="text-slate-500">Urgency: </span>
                                             <span className={`font-mono font-bold ${review.adjusted_urgency === "HIGH" ? "text-red-400" :
-                                                    review.adjusted_urgency === "MEDIUM" ? "text-yellow-400" : "text-slate-400"
+                                                review.adjusted_urgency === "MEDIUM" ? "text-yellow-400" : "text-slate-400"
                                                 }`}>{review.adjusted_urgency}</span>
                                         </div>
                                     </div>

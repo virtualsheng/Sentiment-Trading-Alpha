@@ -260,7 +260,7 @@ class StreamService:
         # Red-team review
         red_team_review = None
         red_team_debug = None
-        red_team_enabled = bool(getattr(config, 'red_team_enabled', None))
+        red_team_enabled = bool(getattr(config, 'red_team_enabled', True))
         if red_team_enabled:
             yield f": {json.dumps({'type': 'stage-start', 'stage': 4})}\n\n"
             try:

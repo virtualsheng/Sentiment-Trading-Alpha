@@ -668,6 +668,8 @@ def process_signals(
                 new_rank = _type_rank.get(trading_type.upper(), 2)
                 _max_mins = _cv.get("max_holding_minutes", {}).get(trading_type, holding_minutes * 3)
                 entered_naive = open_pos.entered_at
+                if entered_naive is not None and entered_naive.tzinfo is None:
+                    entered_naive = entered_naive.replace(tzinfo=timezone.utc)
                 hard_cap = entered_naive + timedelta(minutes=_max_mins) if entered_naive else None
                 proposed = now + timedelta(minutes=holding_minutes)
                 if new_rank >= old_rank:

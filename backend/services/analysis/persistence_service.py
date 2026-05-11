@@ -241,7 +241,10 @@ class PersistenceService:
                             "market_bluster": score.market_bluster,
                             "policy_change": score.policy_change,
                             "confidence": score.confidence,
-                            "reasoning": score.reasoning
+                            "reasoning": score.reasoning,
+                            "directional_score": (sentiment_results or {}).get(symbol, {}).get("directional_score"),
+                            "signal_type": (sentiment_results or {}).get(symbol, {}).get("signal_type", "HOLD"),
+                            "urgency": (sentiment_results or {}).get(symbol, {}).get("urgency", "LOW"),
                         }
                         for symbol, score in response.sentiment_scores.items()
                     },

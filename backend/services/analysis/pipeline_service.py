@@ -383,7 +383,7 @@ class PipelineService:
         # ── Red-team review ──────────────────────────────────────────────
         red_team_review = None
         red_team_debug = None
-        red_team_enabled = bool(getattr(config, 'red_team_enabled', None))
+        red_team_enabled = bool(getattr(config, 'red_team_enabled', True))
         red_team_status = "skipped"
         if red_team_enabled:
             red_started_at = time.time()
