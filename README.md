@@ -17,7 +17,6 @@ ollama serve
 
 # Terminal 2 — Start the backend
 pip install -r requirements.txt
-playwright install chromium
 python run.py                              # Windows
 python3.12 run.py                          # macOS
 
@@ -82,7 +81,7 @@ Bitcoin and oil are capped at 2x leverage.
 
 ### Prerequisites
 
-- **Python 3.12** — use exactly 3.12; the Playwright-backed ingestion path is not tested on 3.14+
+- **Python 3.12** — use exactly 3.12; the ingestion path is not tested on 3.14+
 - **Node.js 20.9+**
 - **[Ollama](https://ollama.com)** with at least one compatible model pulled
 
@@ -151,7 +150,6 @@ Create and activate a Python 3.12 virtual environment, then:
 
 ```bash
 pip install -r requirements.txt
-playwright install chromium
 ```
 
 **Windows:**
@@ -159,8 +157,6 @@ playwright install chromium
 ```powershell
 python run.py
 ```
-
-`run.py` sets the correct Windows event loop policy before Uvicorn starts (required for Playwright) and defaults hot reload to off. Uvicorn's reload mode breaks Playwright on Windows — leave it off unless you know what you're doing.
 
 **macOS:**
 

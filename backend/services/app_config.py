@@ -525,7 +525,7 @@ def _maybe_import_legacy_app_config(db: Session) -> AppConfig | None:
         rss_article_limits=_normalize_rss_article_limits(parse_json(row_value("rss_article_limits", {}), {})),
         data_ingestion_interval_seconds=int(row_value("data_ingestion_interval_seconds", 900) or 900),
         snapshot_retention_limit=int(row_value("snapshot_retention_limit", DEFAULT_SNAPSHOT_RETENTION_LIMIT) or DEFAULT_SNAPSHOT_RETENTION_LIMIT),
-        web_research_enabled=bool(row_value("web_research_enabled", False)),
+        web_research_enabled=bool(row_value("web_research_enabled", True)),
         allow_extended_hours_trading=bool(row_value("allow_extended_hours_trading", True)),
         remote_snapshot_enabled=bool(row_value("remote_snapshot_enabled", False)),
         telegram_remote_control_enabled=bool(row_value("telegram_remote_control_enabled", False)),
@@ -675,7 +675,7 @@ def get_or_create_app_config(db: Session) -> AppConfig:
             config.snapshot_retention_limit = DEFAULT_SNAPSHOT_RETENTION_LIMIT
             changed = True
         if getattr(config, "web_research_enabled", None) is None:
-            config.web_research_enabled = False
+            config.web_research_enabled = True
             changed = True
         if getattr(config, "allow_extended_hours_trading", None) is None:
             config.allow_extended_hours_trading = True
@@ -791,7 +791,7 @@ def get_or_create_app_config(db: Session) -> AppConfig:
         rss_article_limits=dict(DEFAULT_RSS_ARTICLE_LIMITS),
         data_ingestion_interval_seconds=900,
         snapshot_retention_limit=DEFAULT_SNAPSHOT_RETENTION_LIMIT,
-        web_research_enabled=False,
+        web_research_enabled=True,
         allow_extended_hours_trading=True,
         alpaca_execution_mode=DEFAULT_ALPACA_EXECUTION_MODE,
         remote_snapshot_enabled=False,
@@ -1255,7 +1255,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "local_provider": str(getattr(config, "local_provider", "ollama") or "ollama"),
         "risk_profile": _normalize_risk_profile(getattr(config, "risk_profile", DEFAULT_RISK_PROFILE)),
         "risk_policy": _normalize_risk_policy(getattr(config, "risk_policy", {})),
-        "web_research_enabled": bool(getattr(config, "web_research_enabled", False)),
+        "web_research_enabled": bool(getattr(config, "web_research_enabled", True)),
         "allow_extended_hours_trading": bool(getattr(config, "allow_extended_hours_trading", True)),
         "remote_snapshot_enabled": bool(getattr(config, "remote_snapshot_enabled", False)),
         "telegram_remote_control_enabled": bool(getattr(config, "telegram_remote_control_enabled", False)),

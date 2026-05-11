@@ -365,7 +365,7 @@ class AppConfig(Base):
     local_provider = Column(String(32), nullable=False, default="ollama")
     risk_profile = Column(String(20), nullable=False, default="standard")
     risk_policy = Column(JSON, nullable=False, default={})
-    web_research_enabled = Column(Boolean, nullable=False, default=False)
+    web_research_enabled = Column(Boolean, nullable=False, default=True)
     allow_extended_hours_trading = Column(Boolean, nullable=False, default=True)
     remote_snapshot_enabled = Column(Boolean, nullable=False, default=False)
     telegram_remote_control_enabled = Column(Boolean, nullable=False, default=False)

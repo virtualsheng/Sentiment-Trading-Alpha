@@ -1,3 +1,20 @@
+# Release Notes — May 11, 2026
+
+## Trafilatura Article Extraction Fix + Feed Updates
+
+The article extraction pipeline was silently failing for every RSS feed source. The root cause was a bug in `fetch_article_text()` that passed invalid parameters to `trafilatura.fetch_url()` — `favor_recall`, `include_comments`, and `include_tables` only exist on `trafilatura.extract()`, not `fetch_url()`. This raised a silent `TypeError` every time, so `extracted` was always `""` and articles were stored with only the RSS title + summary (~200 chars).
+
+**What changed:**
+
+- **Fixed extraction** — Changed from a single broken `trafilatura.fetch_url()` call to a two-step process: `requests.get()` to download the HTML, then `trafilatura.extract()` to parse the article body text. CNBC articles now return 1,988-5,349 chars of clean text (was 0). BBC returns 3,621-5,119 chars.
+- **Removed Playwright** — Stripped all Playwright code (~200 lines) including `_fetch_with_playwright()`, `_scroll_page()`, `_dismiss_cookie_consent()`, `_to_playwright_cookies()`, and the `PLAYWRIGHT_FALLBACK_ENABLED` env var. Testing confirmed that MarketWatch, NYT, and FastCompany use DataDome bot protection that blocks even headless Chromium — Playwright was adding 30+ seconds of latency per article while never successfully extracting anything from protected sites.
+- **Updated default RSS feeds** — Removed `nyt_business` (NYT blocks with DataDome) and `marketwatch` (blocks with DataDome). Added `npr_news` (NPR — 7,758 chars extracted ✅) and `techcrunch` (TechCrunch — 3,826 chars extracted ✅).
+- **Reusable feed tester** — New `test_rss_feed_compatibility.py` script lets users test any article URL before adding it as a custom feed. Run `python test_rss_feed_compatibility.py <url>` — returns PASS/BLOCKED/LOW_CONTENT/ERROR with recommendations.
+
+**Files changed:** `backend/services/data_ingestion/worker.py`, `backend/services/app_config.py`, `test_rss_feed_compatibility.py` (new)
+
+---
+
 # Release Notes — May 9, 2026
 
 ## Cloud/Local Toggle — Reworked Provider Selection
