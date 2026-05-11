@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from database.engine import DecisionLogSessionLocal, DECISION_LOG_PATH
+from database.engine import DecisionLogSessionLocal, DECISION_LOG_PATH, _decision_log_engine
 from database.models import DecisionLogBase
 from database.models import (
     DecisionLogRun,
@@ -356,7 +356,7 @@ class DecisionLogger:
 
 def ensure_decision_log_tables():
     """Create decision log tables if they don't exist."""
-    DecisionLogBase.metadata.create_all()
+    DecisionLogBase.metadata.create_all(bind=_decision_log_engine)
     print(f"Decision log tables ready at {DECISION_LOG_PATH}")
 
 
