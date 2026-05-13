@@ -677,6 +677,8 @@ def process_signals(
             and open_pos.signal_type == signal_type
         )
 
+        _base_amount = trade_amount if trade_amount and trade_amount > 0 else _L["paper_trade_amount"]
+
         if position_unchanged:
             # ── Accumulation on re-confirmation ────────────────────────
             # When enabled, re-confirmed signals add additional shares up to
@@ -907,7 +909,6 @@ def process_signals(
             continue
 
         # Open new position — size using volatility targeting, then apply portfolio cap
-        _base_amount = trade_amount if trade_amount and trade_amount > 0 else _L["paper_trade_amount"]
         _atr_pct = float(rec.get("atr_pct") or 0.0)
         if getattr(_app_config, "alpaca_fixed_order_size", False):
             _amount = _base_amount

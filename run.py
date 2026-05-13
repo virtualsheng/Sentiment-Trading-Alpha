@@ -10,6 +10,13 @@ import os
 import sys
 from pathlib import Path
 
+# Windows consoles default to cp1252; reconfigure early so all print() calls
+# in the backend can use Unicode (arrows, checkmarks, emoji, etc.) without crashing.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import uvicorn
 
 
@@ -38,7 +45,7 @@ if __name__ == "__main__":
     )
     args, _ = parser.parse_known_args()
 
-    enable_reload = _env_flag("UVICORN_RELOAD", default=True)
+    enable_reload = _env_flag("UVICORN_RELOAD", default=False)
     log_level = "debug" if args.verbose else "info"
 
     if args.verbose:

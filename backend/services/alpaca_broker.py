@@ -6,6 +6,7 @@ alpaca_orders table so there is always a complete audit trail.
 """
 from __future__ import annotations
 
+import math as _math
 import time as _time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
@@ -43,6 +44,15 @@ class AlpacaBroker:
         result = self._get("/v2/positions")
         return result if isinstance(result, list) else []
 
+    def _qty_str(self, qty: float) -> str:
+        """Serialize quantity to string, always flooring to 6 decimal places.
+
+        Python's round() can round UP (e.g. round(2.09402494, 6) → 2.094025),
+        which overshoots Alpaca's available quantity and causes a 403 rejection.
+        Using math.floor guarantees we never request more shares than available.
+        """
+        return str(_math.floor(qty * 1_000_000) / 1_000_000)
+
     def place_order(
         self,
         symbol: str,
@@ -70,12 +80,12 @@ class AlpacaBroker:
             if limit_price:
                 payload["limit_price"] = str(round(limit_price, 2))
             if qty:
-                payload["qty"] = str(round(qty, 6))
+                payload["qty"] = self._qty_str(qty)
         else:
             if notional is not None:
                 payload["notional"] = str(round(notional, 2))
             elif qty is not None:
-                payload["qty"] = str(round(qty, 6))
+                payload["qty"] = self._qty_str(qty)
         if limit_price is not None and order_type == "limit":
             payload["limit_price"] = str(round(limit_price, 2))
         if client_order_id:
@@ -116,7 +126,7 @@ class AlpacaBroker:
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {}
         if qty is not None:
-            payload["qty"] = str(round(qty, 6))
+            payload["qty"] = self._qty_str(qty)
         if limit_price is not None:
             payload["limit_price"] = str(round(limit_price, 2))
         r = httpx.patch(self._base + f"/v2/orders/{order_id}", headers=self._headers, json=payload, timeout=10)

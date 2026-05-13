@@ -298,8 +298,14 @@ def poll_and_dispatch(token: str, authorized_chat_id: str, authorized_user_id: s
     try:
         updates = _get_updates(token, offset, _POLL_TIMEOUT_SECS)
     except Exception as exc:
-        print(f"[telegram-bot] getUpdates error: {exc}")
-        time.sleep(_ERROR_SLEEP_SECS)
+        # 409 Conflict means another instance is already polling (e.g. hot-reload
+        # overlap). Wait longer than the poll window so the ghost connection expires.
+        if "409" in str(exc):
+            print(f"[telegram-bot] 409 Conflict — another poller active, waiting {_POLL_TIMEOUT_SECS + 5}s for it to expire")
+            time.sleep(_POLL_TIMEOUT_SECS + 5)
+        else:
+            print(f"[telegram-bot] getUpdates error: {exc}")
+            time.sleep(_ERROR_SLEEP_SECS)
         return offset
 
     if updates:

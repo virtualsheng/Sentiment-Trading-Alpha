@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "private": true,
     "scripts": {
-        "dev": "next dev -p 3000",
+        "dev": "next dev --webpack -p 3000",
         "dev:webpack": "next dev --webpack -p 3000",
         "dev:turbo": "next dev -p 3000",
         "dev:verbose": "cross-env NEXT_PUBLIC_VERBOSE=true next dev -p 3000",
