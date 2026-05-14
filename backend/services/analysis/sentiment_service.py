@@ -165,7 +165,8 @@ class SentimentService:
 
         async def _analyze_symbol(symbol: str, index: int) -> SentimentAnalysisResponse:
             sym_posts = posts_by_symbol.get(symbol)
-            print(f"Stage 2 [{index+1}/{stage2_symbol_count}]: analyzing {symbol}...")
+            _B = "\033[94m"; _X = "\033[0m"
+            print(f"Stage 2 [{index+1}/{stage2_symbol_count}]: analyzing {_B}{symbol}{_X}...")
             # Skip the LLM entirely when no articles matched this symbol —
             # saves tokens and produces a clear "no data" message instead of boilerplate.
             if sym_posts is not None and len(sym_posts) == 0:
@@ -226,7 +227,10 @@ class SentimentService:
                 ),
                 web_research_context=web_context_by_symbol.get(symbol, ""),
             )
-            print(f"Stage 2 [{index+1}/{stage2_symbol_count}]: {symbol} done — signal={getattr(result, 'signal_type', '?')} score={getattr(result, 'confidence', 0.0):.2f}")
+            _B = "\033[94m"; _R = "\033[91m"; _G = "\033[92m"; _Y = "\033[93m"; _X = "\033[0m"
+            _sig = getattr(result, 'signal_type', '?')
+            _sc = _R if _sig == "SHORT" else _G if _sig == "LONG" else _Y if _sig == "HOLD" else _X
+            print(f"Stage 2 [{index+1}/{stage2_symbol_count}]: {_B}{symbol}{_X} done — signal={_sc}{_sig}{_X} score={getattr(result, 'confidence', 0.0):.2f}")
             return result
 
         async def _analyze_with_progress(symbol: str, index: int) -> SentimentAnalysisResponse:

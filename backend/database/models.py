@@ -305,6 +305,9 @@ class PaperTrade(Base):
 
     original_amount = Column(Float, nullable=True)             # initial entry amount before any accumulation; used to cap accumulation at max_multiplier × original
 
+    ramp_stage = Column(String(20), nullable=True, default="probe")            # probe → building → full
+    ramp_promotion_count = Column(Integer, nullable=True, default=0)           # number of stage promotions
+
     __table_args__ = (
         Index("ix_paper_trades_underlying", "underlying"),
         Index("ix_paper_trades_entered_at", "entered_at"),

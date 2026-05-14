@@ -1519,7 +1519,11 @@ class SentimentEngine:
         try:
             tech_indicators = getattr(self, "_last_technical_indicators", None) or {}
             computed = self.compute_symbol_scores(data, symbol_for_scoring, technical_indicators=tech_indicators, cloud_backend=_is_cloud)
-            print(f"DEBUG _parse_response computed scores for {symbol_for_scoring}: {computed}")
+            _B = "\033[94m"; _R = "\033[91m"; _G = "\033[92m"; _Y = "\033[93m"; _X = "\033[0m"
+            _sig = (computed or {}).get("signal_type", "")
+            _sc = _R if _sig == "SHORT" else _G if _sig == "LONG" else _Y if _sig == "HOLD" else _X
+            _scores_str = str(computed).replace(f"'signal_type': '{_sig}'", f"'signal_type': '{_sc}{_sig}{_X}'")
+            print(f"DEBUG _parse_response computed scores for {_B}{symbol_for_scoring}{_X}: {_scores_str}")
         except Exception as e:
             print(f"DEBUG _parse_response [{symbol_for_scoring or '?'}]: SCORING ERROR — {e}")
             computed = None

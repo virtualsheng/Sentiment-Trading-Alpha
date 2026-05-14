@@ -111,11 +111,24 @@ async def build_crazy_ramp_context(
             fetch["ok"] = False
             fetch["error"] = "stale_intraday"
 
+        promotion_thresholds = {
+            "probe_to_building": {
+                "min_directional_score": float(thresholds.get("probe_to_building_score", 0.50)),
+                "min_confidence":        float(thresholds.get("probe_to_building_conf", 0.70)),
+                "min_consecutive_runs":  int(thresholds.get("probe_to_building_runs", 2)),
+            },
+            "building_to_full": {
+                "min_directional_score": float(thresholds.get("building_to_full_score", 0.65)),
+                "min_confidence":        float(thresholds.get("building_to_full_conf", 0.80)),
+                "min_consecutive_runs":  int(thresholds.get("building_to_full_runs", 4)),
+            },
+        }
         return str(sym).upper().strip(), {
             "ramp_threshold_bucket": bucket,
             "threshold_source": source if threshold_source == "calibrated_bucket" else "fallback",
             "thresholds": thresholds,
             "promotion_allowed": bool(promotion_allowed and fetch.get("ok")),
+            "promotion_thresholds": promotion_thresholds,
             "fetch_latency_ms": int(fetch.get("fetch_latency_ms", 0) or 0),
             "fetch_timeout_hit": bool(fetch_timeout_hit),
             "stale_age_ms": int(fetch.get("stale_age_ms", 0) or 0),

@@ -118,23 +118,25 @@ def market_status(allow_extended_hours: bool = True) -> Dict[str, Any]:
 
 def _window_active(pos, now: datetime) -> bool:
     """Return True if the position's conviction holding window has not yet expired."""
-    win = getattr(pos, "holding_window_until", None)
+    win = _safe_utc(getattr(pos, "holding_window_until", None))
     if not win:
         return False
-    if win.tzinfo is None:
-        win = win.replace(tzinfo=timezone.utc)
-    now_utc = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
-    return now_utc < win
+    return _safe_utc(now) < win
 
 
 def _same_market_day(a: Optional[datetime], b: Optional[datetime]) -> bool:
     if a is None or b is None:
         return False
-    if a.tzinfo is None:
-        a = a.replace(tzinfo=timezone.utc)
-    if b.tzinfo is None:
-        b = b.replace(tzinfo=timezone.utc)
-    return a.astimezone(_MARKET_TZ).date() == b.astimezone(_MARKET_TZ).date()
+    return _safe_utc(a).astimezone(_MARKET_TZ).date() == _safe_utc(b).astimezone(_MARKET_TZ).date()
+
+
+def _safe_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Normalize any datetime to timezone-aware UTC. Returns None if dt is None."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _min_same_day_exit_edge_pct(app_config) -> float:
@@ -354,8 +356,7 @@ def close_expired_positions(db, alpaca_pending: Optional[list] = None) -> List[D
         except Exception:
             pass
 
-    now = datetime.now(timezone.utc)
-    now_utc = now.replace(tzinfo=timezone.utc)
+    now_utc = _safe_utc(datetime.now(timezone.utc))
 
     open_positions = (
         db.query(PaperTrade)
@@ -365,9 +366,9 @@ def close_expired_positions(db, alpaca_pending: Optional[list] = None) -> List[D
 
     expired = []
     for pos in open_positions:
-        win = pos.holding_window_until
-        if win.tzinfo is None:
-            win = win.replace(tzinfo=timezone.utc)
+        win = _safe_utc(pos.holding_window_until)
+        if win is None:
+            continue
         if now_utc >= win:
             expired.append(pos)
 
@@ -678,6 +679,7 @@ def process_signals(
         )
 
         _base_amount = trade_amount if trade_amount and trade_amount > 0 else _L["paper_trade_amount"]
+        _atr_pct = float(rec.get("atr_pct") or 0.0)
 
         if position_unchanged:
             # ── Accumulation on re-confirmation ────────────────────────
@@ -713,6 +715,20 @@ def process_signals(
                 _new_suggested = _compute_vol_normalized_amount(
                     _base_amount, conviction_level, _atr_pct
                 ) * _new_size_pct
+
+                # Apply ramp stage cap; also update position's stage if promoted
+                _rec_ramp_stage = str(rec.get("ramp_stage") or "probe")
+                _pos_ramp_stage = str(getattr(open_pos, "ramp_stage", None) or "probe")
+                _stage_order = {"probe": 0, "building": 1, "full": 2}
+                _rec_rank = _stage_order.get(_rec_ramp_stage, 0)
+                _pos_rank = _stage_order.get(_pos_ramp_stage, 0)
+                if _rec_rank > _pos_rank:
+                    open_pos.ramp_stage = _rec_ramp_stage
+                    open_pos.ramp_promotion_count = (int(getattr(open_pos, "ramp_promotion_count", None) or 0) + 1)
+                    print(f"[paper] {underlying}: ramp promoted {_pos_ramp_stage}→{_rec_ramp_stage} (×{open_pos.ramp_promotion_count})")
+                _effective_ramp_stage = str(getattr(open_pos, "ramp_stage", None) or "probe")
+                _ramp_cap = {"probe": 0.25, "building": 0.60, "full": 1.0}.get(_effective_ramp_stage, 1.0)
+                _new_suggested *= _ramp_cap
                 _new_suggested = max(_new_suggested, 1.0)
 
                 # Only accumulate if the new signal suggests a larger position
@@ -770,15 +786,13 @@ def process_signals(
                 old_rank = _type_rank.get((open_pos.trading_type or "SWING").upper(), 2)
                 new_rank = _type_rank.get(trading_type.upper(), 2)
                 _max_mins = _cv.get("max_holding_minutes", {}).get(trading_type, holding_minutes * 3)
-                entered_naive = open_pos.entered_at
-                if entered_naive is not None and entered_naive.tzinfo is None:
-                    entered_naive = entered_naive.replace(tzinfo=timezone.utc)
+                entered_naive = _safe_utc(open_pos.entered_at)
                 hard_cap = entered_naive + timedelta(minutes=_max_mins) if entered_naive else None
                 proposed = now + timedelta(minutes=holding_minutes)
                 if new_rank >= old_rank:
                     new_window = min(proposed, hard_cap) if hard_cap else proposed
                 else:
-                    cur_win = open_pos.holding_window_until
+                    cur_win = _safe_utc(open_pos.holding_window_until)
                     new_window = min(cur_win, proposed) if cur_win else proposed
                 open_pos.holding_window_until = new_window
                 open_pos.conviction_level = conviction_level
@@ -849,11 +863,8 @@ def process_signals(
                 .first()
             )
             if _recent and _recent.exited_at:
-                _exited = _recent.exited_at
-                if _exited.tzinfo is None:
-                    _exited = _exited.replace(tzinfo=timezone.utc)
-                _now_utc = now.replace(tzinfo=timezone.utc)
-                if _now_utc < _exited + timedelta(minutes=_reentry_cooldown):
+                _exited = _safe_utc(_recent.exited_at)
+                if _safe_utc(now) < _exited + timedelta(minutes=_reentry_cooldown):
                     action_summary["action"] = "skipped"
                     action_summary["reason"] = "reentry_cooldown"
                     print(f"[paper] {underlying} {signal_type}: skipped — reentry cooldown active ({_reentry_cooldown}min since last exit)")
@@ -909,7 +920,6 @@ def process_signals(
             continue
 
         # Open new position — size using volatility targeting, then apply portfolio cap
-        _atr_pct = float(rec.get("atr_pct") or 0.0)
         if getattr(_app_config, "alpaca_fixed_order_size", False):
             _amount = _base_amount
         else:
@@ -918,6 +928,12 @@ def process_signals(
         # Apply continuous entry size_pct scaling (sigmoid allocation)
         _size_pct = float(rec.get("size_pct", "100.0") or "100.0") / 100.0
         _amount *= _size_pct
+
+        # Apply ramp stage cap (probe=25%, building=60%, full=100%)
+        _ramp_stage_entry = str(rec.get("ramp_stage") or "probe")
+        _ramp_cap = {"probe": 0.25, "building": 0.60, "full": 1.0}.get(_ramp_stage_entry, 1.0)
+        _amount *= _ramp_cap
+
         _amount = max(_amount, 1.0)
 
         if _portfolio_cap is not None:
@@ -951,6 +967,8 @@ def process_signals(
                 holding_period_hours=round(holding_minutes / 60, 2),
                 holding_window_until=window_until,
                 original_amount=_amount,
+                ramp_stage=_ramp_stage_entry,
+                ramp_promotion_count=0,
             )
             db.add(new_trade)
             db.flush()  # get new_trade.id
@@ -1219,10 +1237,8 @@ def get_summary(db) -> Dict[str, Any]:
         unrealized = round(_directional_pnl(t.signal_type, t.entry_price, current, t.amount), 4)
         unrealized_pct = round(_directional_return_pct(t.signal_type, t.entry_price, current), 4)
         open_pnl += unrealized
-        now_utc = datetime.now(timezone.utc).replace(tzinfo=timezone.utc)
-        win = t.holding_window_until
-        if win and win.tzinfo is None:
-            win = win.replace(tzinfo=timezone.utc)
+        now_utc = _safe_utc(datetime.now(timezone.utc))
+        win = _safe_utc(t.holding_window_until)
         window_active = bool(win and now_utc < win)
         window_remaining_minutes = (
             round((win - now_utc).total_seconds() / 60) if window_active else None
@@ -1325,9 +1341,5 @@ def get_summary(db) -> Dict[str, Any]:
 
 
 def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
-    if dt is None:
-        return None
-    from datetime import timezone
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.isoformat()
+    normalized = _safe_utc(dt)
+    return normalized.isoformat() if normalized is not None else None

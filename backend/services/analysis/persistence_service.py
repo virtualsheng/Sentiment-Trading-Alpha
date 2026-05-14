@@ -411,7 +411,8 @@ class PersistenceService:
                     if _skipped:
                         print(f"[paper] {len(_skipped)} signal(s) skipped this run: {[a.get('reason') for a in _skipped]}")
             except Exception as _pe:
-                print(f"Paper trading hook error: {_pe}")
+                import traceback as _tb
+                print(f"Paper trading hook error: {_pe}\n{_tb.format_exc()}")
             retention_limit = int(getattr(config, "snapshot_retention_limit", DEFAULT_SNAPSHOT_RETENTION_LIMIT))
             self.prune_saved_analyses(db, retention_limit)
             db.commit()

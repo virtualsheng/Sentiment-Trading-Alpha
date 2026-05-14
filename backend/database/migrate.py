@@ -276,14 +276,16 @@ def migrate():
         else:
             existing_pt_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(paper_trades)")).fetchall()]
             for column_name, column_type in [
-                ("conviction_level",    "VARCHAR(10)"),
-                ("trading_type",        "VARCHAR(20)"),
-                ("holding_period_hours","INTEGER"),
-                ("holding_window_until","DATETIME"),
-                ("close_reason",        "VARCHAR(40)"),
-                ("trailing_stop_price", "REAL"),
-                ("best_price_seen",     "REAL"),
-                ("original_amount",     "REAL"),
+                ("conviction_level",     "VARCHAR(10)"),
+                ("trading_type",         "VARCHAR(20)"),
+                ("holding_period_hours", "INTEGER"),
+                ("holding_window_until", "DATETIME"),
+                ("close_reason",         "VARCHAR(40)"),
+                ("trailing_stop_price",  "REAL"),
+                ("best_price_seen",      "REAL"),
+                ("original_amount",      "REAL"),
+                ("ramp_stage",           "VARCHAR(20)"),
+                ("ramp_promotion_count", "INTEGER"),
             ]:
                 if column_name not in existing_pt_cols:
                     print(f"Adding {column_name} to paper_trades...")

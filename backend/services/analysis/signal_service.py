@@ -38,6 +38,29 @@ def _sigmoid_size_pct(
     return min_size + (max_size - min_size) / (1.0 + math.exp(-steepness * (abs_score - midpoint)))
 
 
+def _compute_ramp_stage(
+    current_stage: str,
+    promotion_allowed: bool,
+    promotion_thresholds: dict,
+    directional_score: float,
+    confidence: float,
+) -> str:
+    """Advance ramp stage based on signal strength. Never demotes."""
+    if not promotion_allowed:
+        return current_stage
+    score = abs(directional_score)
+    stage = str(current_stage or "probe")
+    if stage == "probe":
+        t = promotion_thresholds.get("probe_to_building", {})
+        if score >= float(t.get("min_directional_score", 0.50)) and confidence >= float(t.get("min_confidence", 0.70)):
+            return "building"
+    elif stage == "building":
+        t = promotion_thresholds.get("building_to_full", {})
+        if score >= float(t.get("min_directional_score", 0.65)) and confidence >= float(t.get("min_confidence", 0.80)):
+            return "full"
+    return stage
+
+
 def _decay_factor(age_hours: float, half_life: float, min_factor: float = 0.10) -> float:
     """Exponential decay: factor = max(min_factor, 0.5^(age/half_life))."""
     if age_hours <= 0.0:
@@ -270,12 +293,18 @@ class SignalService:
                 recommendation["size_pct"] = str(round(size_pct, 1))
                 if str(risk_profile or "").lower().strip() == "crazy":
                     sym_ctx = ((crazy_ramp_context or {}).get("symbols") or {}).get(sym.upper(), {})
-                    recommendation["ramp_stage"] = "probe"
+                    _prev_stage = str(previous_rec.get("ramp_stage") or "probe")
+                    _promotion_allowed = bool(sym_ctx.get("promotion_allowed", False))
+                    _promotion_thresholds = dict(sym_ctx.get("promotion_thresholds") or {})
+                    recommendation["ramp_stage"] = _compute_ramp_stage(
+                        _prev_stage, _promotion_allowed, _promotion_thresholds,
+                        directional, confidence,
+                    )
                     recommendation["ramp_threshold_bucket"] = str(sym_ctx.get("ramp_threshold_bucket", "") or "")
                     recommendation["threshold_source"] = str(sym_ctx.get("threshold_source", "fallback") or "fallback")
                     recommendation["fetch_latency_ms"] = str(sym_ctx.get("fetch_latency_ms", 0))
                     recommendation["fetch_timeout_hit"] = str(bool(sym_ctx.get("fetch_timeout_hit", False))).lower()
-                    recommendation["ramp_promotion_enabled"] = str(bool(sym_ctx.get("promotion_allowed", False))).lower()
+                    recommendation["ramp_promotion_enabled"] = str(_promotion_allowed).lower()
                 recommendations.append(recommendation)
 
             conviction = abs(directional) * confidence
@@ -417,11 +446,14 @@ class SignalService:
         print(f"[signal] Blue-team signal: {signal_type}, conviction={conviction_level}, confidence={confidence_score:.3f}, risk_profile={risk_profile}")
         if recommendations:
             for rec in recommendations:
+                _ramp = rec.get('ramp_stage', 'N/A')
+                _promoted = rec.get('ramp_promotion_enabled', 'false') == 'true'
+                _ramp_info = f"ramp={_ramp}" + (" (promotion_allowed)" if _promoted else "")
                 print(f"[signal]   → {rec.get('underlying_symbol', '?')} {rec.get('action', '?')} "
                       f"@{rec.get('symbol', '?')} {rec.get('leverage', '?')} "
                       f"size={rec.get('size_pct', '?')}% "
                       f"thesis={rec.get('thesis', '?')} "
-                      f"ramp={rec.get('ramp_stage', 'N/A')}")
+                      f"{_ramp_info}")
         else:
             print(f"[signal]   No recommendations generated")
 
